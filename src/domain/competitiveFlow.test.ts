@@ -6,11 +6,16 @@ import {
   resolveTournamentFinancialReview,
 } from './competitive'
 import { calculateAvailableCredit, registerCreditUsage } from './credits'
+import {
+  assessOfficialChampionUpdateReadiness,
+  updateOfficialLeagueChampion,
+} from './hallOfFame'
 import { calculateTournamentStanding } from './leaderboard'
 import {
   applyDateCreditCorrections,
   buildLeagueDateCreditCorrections,
   buildLeagueLeaderboard,
+  buildTheoreticalLeagueLeaderboard,
   consolidateTournamentPrizes,
   finishLeaguePeriod,
   markLeagueReviewRequired,
@@ -108,6 +113,75 @@ function finishedEventWithPrePlayDrop(
   setup = setParticipantActive(setup, dropped.id, false)
   const saved = saveRoundWithWinner(activeRound(setup))
   return finalizeTournament(finishRound(saved, saved.rounds[0].id))
+}
+
+function withRotatingScores(
+  tournament: Tournament,
+  scoresByName: Record<string, number>,
+  updatedAt = tournament.updatedAt,
+): Tournament {
+  const namesByParticipantId = new Map(
+    tournament.participants.map((participant) => [participant.id, participant.name]),
+  )
+  const scoreResult = <T extends {
+    participantId: string
+    rotating1: boolean
+    rotating2: boolean
+    rotating3: boolean
+    wonTable: boolean
+    eliminations: number
+    survived: boolean
+    achievementPoints: number
+  }>(result: T): T => {
+    const score = scoresByName[namesByParticipantId.get(result.participantId) ?? ''] ?? 0
+    return {
+      ...result,
+      rotating1: score >= 1,
+      rotating2: score >= 2,
+      rotating3: score >= 3,
+      wonTable: false,
+      eliminations: 0,
+      survived: false,
+      achievementPoints: score,
+    }
+  }
+  return {
+    ...tournament,
+    updatedAt,
+    rounds: tournament.rounds.map((round) => ({
+      ...round,
+      tables: round.tables.map((table) => ({
+        ...table,
+        results: table.results.map(scoreResult),
+        savedResults: table.savedResults.map(scoreResult),
+      })),
+    })),
+  }
+}
+
+function finishedEventWithRotatingScores(
+  name: string,
+  league: LeaguePeriod,
+  scoresByName: Record<string, number>,
+): Tournament {
+  const active = activeRound(setupEvent(name, 1, league))
+  const scored = withRotatingScores(active, scoresByName)
+  const round = scored.rounds[0]
+  const saved = round.tables.reduce(
+    (current, table) => saveTableResults(current, round.id, table.id),
+    scored,
+  )
+  return finalizeTournament(finishRound(saved, round.id))
+}
+
+function emptyLeagueLedger(league: LeaguePeriod): LeaguePrizeLedger {
+  return {
+    leaguePeriods: [league],
+    contributions: [],
+    creditMovements: [],
+    specialPointMovements: [],
+    championSnapshots: [],
+  }
 }
 
 describe('Standing y Leaderboard', () => {
@@ -255,6 +329,221 @@ describe('Standing y Leaderboard', () => {
       leaguePeriods: [finishedLeague],
     })
     expect(official.map((entry) => entry.playerKey)).toEqual(reversedKeys)
+  })
+})
+
+describe('resolución administrativa de empates de liga', () => {
+  function closeLeagueWithExplicitTie() {
+    const league = {
+      ...createDefaultLeaguePeriod(ids('explicit-tie-league')),
+      id: 'league-explicit-tie',
+    }
+    const tournament = finishedEventWithRotatingScores(
+      'Fecha con empate explícito',
+      league,
+      { Ana: 3, Beto: 3, Carla: 1 },
+    )
+    const playerKeys = new Map(
+      tournament.participants.map((participant) => [participant.name, participant.playerKey]),
+    )
+    const administrativeOrder = [
+      playerKeys.get('Beto')!,
+      playerKeys.get('Ana')!,
+      playerKeys.get('Carla')!,
+    ]
+    const ledger = finishLeaguePeriod(
+      emptyLeagueLedger(league),
+      league.id,
+      [tournament],
+      ids('explicit-tie-close'),
+      '2026-08-31T20:00:00.000Z',
+      administrativeOrder,
+    )
+    return { league, tournament, ledger, playerKeys }
+  }
+
+  it('no convierte el orden normal de una liga sin empate en resolución administrativa', () => {
+    const league = {
+      ...createDefaultLeaguePeriod(ids('no-tie-league')),
+      id: 'league-without-tie',
+    }
+    const tournament = finishedEventWithRotatingScores(
+      'Fecha sin empate',
+      league,
+      { Ana: 3, Beto: 2, Carla: 1 },
+    )
+    const initialLedger = emptyLeagueLedger(league)
+    const normalOrder = buildLeagueLeaderboard(
+      [tournament],
+      league,
+      initialLedger,
+    ).map((entry) => entry.playerKey)
+    const closed = finishLeaguePeriod(
+      initialLedger,
+      league.id,
+      [tournament],
+      ids('no-tie-close'),
+      '2026-08-31T20:00:00.000Z',
+      normalOrder,
+    )
+    const closedPeriod = closed.leaguePeriods[0]
+    const snapshot = closed.championSnapshots[0]
+
+    expect(closedPeriod.administrativeLeaderboardPlayerKeys).toBeUndefined()
+    expect(closedPeriod.finalizedLeaderboardPlayerKeys).toEqual(normalOrder)
+
+    const correctedTournament = withRotatingScores(
+      tournament,
+      { Ana: 3, Beto: 3, Carla: 1 },
+      '2026-09-01T10:00:00.000Z',
+    )
+    const correctedLedger = markLeagueReviewRequired(
+      closed,
+      league.id,
+      '2026-09-01T10:00:00.000Z',
+    )
+    const correctedPeriod = correctedLedger.leaguePeriods[0]
+    const theoretical = buildTheoreticalLeagueLeaderboard(
+      [correctedTournament],
+      correctedPeriod,
+      correctedLedger,
+    )
+    const legacyNormalOrderPeriod = {
+      ...correctedPeriod,
+      administrativeLeaderboardPlayerKeys: normalOrder,
+    }
+    const theoreticalWithLegacyOrder = buildTheoreticalLeagueLeaderboard(
+      [correctedTournament],
+      legacyNormalOrderPeriod,
+      correctedLedger,
+    )
+
+    expect(assessOfficialChampionUpdateReadiness(
+      correctedPeriod,
+      theoretical,
+      [correctedTournament],
+    )).toMatchObject({ ready: false, reason: 'unresolved_tie' })
+    expect(assessOfficialChampionUpdateReadiness(
+      legacyNormalOrderPeriod,
+      theoreticalWithLegacyOrder,
+      [correctedTournament],
+    )).toMatchObject({ ready: false, reason: 'unresolved_tie' })
+    expect(() => updateOfficialLeagueChampion(
+      correctedLedger,
+      snapshot.id,
+      legacyNormalOrderPeriod,
+      theoreticalWithLegacyOrder,
+      [correctedTournament],
+    )).toThrow(/empate exacto/i)
+    expect(correctedLedger.championSnapshots[0].playerKey).toBe(snapshot.playerKey)
+    expect(correctedLedger.creditMovements).toEqual(closed.creditMovements)
+  })
+
+  it('conserva una decisión explícita únicamente para los jugadores empatados', () => {
+    const { ledger, playerKeys } = closeLeagueWithExplicitTie()
+    const period = ledger.leaguePeriods[0]
+
+    expect(period.administrativeLeaderboardPlayerKeys).toEqual([
+      playerKeys.get('Beto'),
+      playerKeys.get('Ana'),
+    ])
+    expect(period.finalizedLeaderboardPlayerKeys?.[0]).toBe(playerKeys.get('Beto'))
+    expect(ledger.championSnapshots[0]).toMatchObject({
+      playerKey: playerKeys.get('Beto'),
+      playerName: 'Beto',
+    })
+  })
+
+  it('una corrección posterior invalida el desempate anterior sin alterar el orden oficial', () => {
+    const { ledger, tournament, league, playerKeys } = closeLeagueWithExplicitTie()
+    const finalizedOrder = ledger.leaguePeriods[0].finalizedLeaderboardPlayerKeys
+    const correctedTournament = {
+      ...withRotatingScores(
+        tournament,
+        { Ana: 1, Beto: 3, Carla: 3 },
+        '2026-09-02T10:00:00.000Z',
+      ),
+      financialReviewRequired: true,
+    }
+    const refreshed = refreshLeagueFinancialReviewRequirements(
+      ledger,
+      [correctedTournament],
+    )
+    const period = refreshed.leaguePeriods[0]
+    const theoretical = buildTheoreticalLeagueLeaderboard(
+      [correctedTournament],
+      period,
+      refreshed,
+    )
+
+    expect(period.administrativeLeaderboardPlayerKeys).toBeUndefined()
+    expect(period.finalizedLeaderboardPlayerKeys).toEqual(finalizedOrder)
+    expect(period.finalizedLeaderboardPlayerKeys?.[0]).toBe(playerKeys.get('Beto'))
+    expect(assessOfficialChampionUpdateReadiness(
+      period,
+      theoretical,
+      [correctedTournament],
+    )).toMatchObject({ ready: false, reason: 'unresolved_tie' })
+    expect(refreshed.creditMovements).toEqual(ledger.creditMovements)
+    expect(league.id).toBe(period.id)
+  })
+
+  it('permite resolver nuevamente el empate al refinalizar sin duplicar crédito', () => {
+    const { ledger, tournament, league, playerKeys } = closeLeagueWithExplicitTie()
+    const finalizedOrder = ledger.leaguePeriods[0].finalizedLeaderboardPlayerKeys
+    const correctedTournament = {
+      ...withRotatingScores(
+        tournament,
+        { Ana: 1, Beto: 3, Carla: 3 },
+        '2026-09-02T10:00:00.000Z',
+      ),
+      financialReviewRequired: true,
+    }
+    const invalidated = refreshLeagueFinancialReviewRequirements(
+      ledger,
+      [correctedTournament],
+    )
+    const reopened = reopenLeaguePeriod(
+      invalidated,
+      league.id,
+      '2026-09-03T10:00:00.000Z',
+    )
+    const refinalized = finishLeaguePeriod(
+      reopened,
+      league.id,
+      [correctedTournament],
+      ids('tie-refinalize'),
+      '2026-09-04T10:00:00.000Z',
+      [playerKeys.get('Carla')!, playerKeys.get('Beto')!, playerKeys.get('Ana')!],
+    )
+    const period = refinalized.leaguePeriods[0]
+    const theoretical = buildTheoreticalLeagueLeaderboard(
+      [correctedTournament],
+      period,
+      refinalized,
+    )
+
+    expect(period.administrativeLeaderboardPlayerKeys).toEqual([
+      playerKeys.get('Carla'),
+      playerKeys.get('Beto'),
+    ])
+    expect(period.finalizedLeaderboardPlayerKeys).toEqual(finalizedOrder)
+    expect(assessOfficialChampionUpdateReadiness(
+      period,
+      theoretical,
+      [correctedTournament],
+    )).toMatchObject({ ready: true, champion: { playerKey: playerKeys.get('Carla') } })
+    expect(refinalized.creditMovements).toEqual(ledger.creditMovements)
+
+    const updatedChampion = updateOfficialLeagueChampion(
+      refinalized,
+      refinalized.championSnapshots[0].id,
+      period,
+      theoretical,
+      [correctedTournament],
+    )
+    expect(updatedChampion.championSnapshots[0].playerKey).toBe(playerKeys.get('Carla'))
+    expect(updatedChampion.creditMovements).toEqual(ledger.creditMovements)
   })
 })
 

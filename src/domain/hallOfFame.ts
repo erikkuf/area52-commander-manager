@@ -61,9 +61,35 @@ function hasOfficialChampionOrder(
 
 function hasAdministrativeChampionOrder(
   leaguePeriod: LeaguePeriod,
+  standings: LeagueLeaderboardEntry[],
   champion: LeagueLeaderboardEntry,
 ): boolean {
-  return leaguePeriod.administrativeLeaderboardPlayerKeys?.[0] === champion.playerKey
+  const administrativeOrder = leaguePeriod.administrativeLeaderboardPlayerKeys
+  if (!administrativeOrder?.length || new Set(administrativeOrder).size !== administrativeOrder.length) {
+    return false
+  }
+
+  const exactTieGroups: LeagueLeaderboardEntry[][] = []
+  standings.forEach((entry) => {
+    const current = exactTieGroups.at(-1)
+    if (current && haveEqualChampionTieBreakers(current[0], entry)) current.push(entry)
+    else exactTieGroups.push([entry])
+  })
+  const tiedGroups = exactTieGroups.filter((group) => group.length > 1)
+  const tiedPlayerKeys = new Set(
+    tiedGroups.flatMap((group) => group.map((entry) => entry.playerKey)),
+  )
+  if (administrativeOrder.some((playerKey) => !tiedPlayerKeys.has(playerKey))) return false
+
+  const championGroup = tiedGroups.find((group) =>
+    group.some((entry) => entry.playerKey === champion.playerKey),
+  )
+  if (!championGroup) return false
+  const administrativeIndexes = championGroup.map((entry) =>
+    administrativeOrder.indexOf(entry.playerKey),
+  )
+  if (administrativeIndexes.some((index) => index < 0)) return false
+  return administrativeOrder.indexOf(champion.playerKey) === Math.min(...administrativeIndexes)
 }
 
 export function assessChampionSnapshotReadiness(
@@ -131,7 +157,7 @@ export function assessOfficialChampionUpdateReadiness(
   if (
     runnerUp &&
     haveEqualChampionTieBreakers(champion, runnerUp) &&
-    !hasAdministrativeChampionOrder(leaguePeriod, champion)
+    !hasAdministrativeChampionOrder(leaguePeriod, standings, champion)
   ) {
     return {
       ready: false,

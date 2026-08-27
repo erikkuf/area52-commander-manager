@@ -683,6 +683,13 @@ actual sin imponer ese snapshot, utilizando resultados confirmados, puntos espec
 desempates competitivos. `administrativeLeaderboardPlayerKeys` puede resolver únicamente un empate
 competitivo exacto. Ninguno de estos cálculos modifica movimientos de crédito.
 
+`administrativeLeaderboardPlayerKeys` conserva exclusivamente jugadores pertenecientes a grupos de
+empate competitivo exacto y solo se persiste cuando el cierre requirió una decisión administrativa.
+Nunca se guarda una copia del orden normal completo como si fuera un desempate. Una corrección
+deportiva posterior invalida esa resolución administrativa sin modificar
+`finalizedLeaderboardPlayerKeys`; si el nuevo resultado vuelve a quedar empatado, el staff debe
+resolverlo explícitamente otra vez antes de actualizar al campeón oficial.
+
 Antes de finalizar una liga, los empates exactos pueden ordenarse dentro de su propio grupo. La
 acción no puede mover a un jugador por sobre otro con mejores métricas competitivas. El orden
 elegido se conserva en `administrativeLeaderboardPlayerKeys` y el cierre oficial en

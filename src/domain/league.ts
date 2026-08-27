@@ -129,6 +129,24 @@ export function findExactLeagueTieGroups(
   return groups.filter((group) => group.length > 1)
 }
 
+function normalizeAdministrativeTieBreakOrder(
+  standings: LeagueLeaderboardEntry[],
+  requestedOrder?: string[],
+): string[] | undefined {
+  const tiedPlayerKeys = findExactLeagueTieGroups(standings)
+    .flatMap((group) => group.map((entry) => entry.playerKey))
+  if (tiedPlayerKeys.length === 0 || !requestedOrder?.length) return undefined
+
+  const tiedPlayerKeySet = new Set(tiedPlayerKeys)
+  const resolvedOrder = requestedOrder.filter((playerKey) => tiedPlayerKeySet.has(playerKey))
+  if (
+    new Set(resolvedOrder).size !== resolvedOrder.length ||
+    resolvedOrder.length !== tiedPlayerKeys.length
+  ) return undefined
+
+  return resolvedOrder
+}
+
 interface LeagueLeaderboardBuildOptions {
   respectFinalizedOrder: boolean
 }
@@ -315,10 +333,24 @@ export function finishLeaguePeriod(
       now,
     )
   })
-  const periodWithTieBreak = administrativeLeaderboardPlayerKeys?.length
-    ? { ...leaguePeriod, administrativeLeaderboardPlayerKeys }
-    : leaguePeriod
-  const standings = buildLeagueLeaderboard(dates, periodWithTieBreak, synchronizedLedger)
+  const naturalStandings = buildTheoreticalLeagueLeaderboard(
+    dates,
+    { ...leaguePeriod, administrativeLeaderboardPlayerKeys: undefined },
+    synchronizedLedger,
+  )
+  const resolvedAdministrativeOrder = normalizeAdministrativeTieBreakOrder(
+    naturalStandings,
+    administrativeLeaderboardPlayerKeys ?? leaguePeriod.administrativeLeaderboardPlayerKeys,
+  )
+  const periodWithTieBreak = {
+    ...leaguePeriod,
+    administrativeLeaderboardPlayerKeys: resolvedAdministrativeOrder,
+  }
+  const standings = buildTheoreticalLeagueLeaderboard(
+    dates,
+    periodWithTieBreak,
+    synchronizedLedger,
+  )
   const pool = calculateLeaguePoolSummary(
     synchronizedLedger.contributions,
     leaguePeriodId,
@@ -350,8 +382,7 @@ export function finishLeaguePeriod(
     latestTheoreticalMonthlyAwards: awards,
     finalizedLeaderboardPlayerKeys:
       leaguePeriod.finalizedLeaderboardPlayerKeys ?? standings.map((entry) => entry.playerKey),
-    administrativeLeaderboardPlayerKeys:
-      administrativeLeaderboardPlayerKeys ?? leaguePeriod.administrativeLeaderboardPlayerKeys,
+    administrativeLeaderboardPlayerKeys: resolvedAdministrativeOrder,
   }
 
   const finishedLedger: LeaguePrizeLedger = {
@@ -391,9 +422,7 @@ export function markLeagueReviewRequired(
   now = new Date().toISOString(),
 ): LeaguePrizeLedger {
   const leaguePeriod = ledger.leaguePeriods.find((period) => period.id === leaguePeriodId)
-  if (!leaguePeriod || leaguePeriod.financialReviewRequired) {
-    return ledger
-  }
+  if (!leaguePeriod) return ledger
   return {
     ...ledger,
     leaguePeriods: ledger.leaguePeriods.map((period) =>
@@ -404,6 +433,7 @@ export function markLeagueReviewRequired(
             financialReviewRequired: true,
             financialReviewResolvedAt: undefined,
             financialReviewLastImpactAt: now,
+            administrativeLeaderboardPlayerKeys: undefined,
             updatedAt: now,
           }
         : period,
@@ -448,10 +478,14 @@ export function refreshLeagueFinancialReviewRequirements(
       period.financialReviewRequired ||
       affectedTournaments.length > 0 ||
       (period.status === 'finished' && impactAfterResolution)
+    const administrativeLeaderboardPlayerKeys = impactAfterResolution
+      ? undefined
+      : period.administrativeLeaderboardPlayerKeys
 
     if (
       shouldRequireReview === period.financialReviewRequired &&
-      latestImpact === period.financialReviewLastImpactAt
+      latestImpact === period.financialReviewLastImpactAt &&
+      administrativeLeaderboardPlayerKeys === period.administrativeLeaderboardPlayerKeys
     ) {
       return period
     }
@@ -464,6 +498,7 @@ export function refreshLeagueFinancialReviewRequirements(
         ? undefined
         : period.financialReviewResolvedAt,
       financialReviewLastImpactAt: latestImpact,
+      administrativeLeaderboardPlayerKeys,
     }
   })
   return changed ? { ...ledger, leaguePeriods } : ledger

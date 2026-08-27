@@ -178,7 +178,7 @@ export function LeagueDetailView({
     .reduce((sum, correction) => sum + correction.amount, 0)
 
   const confirmFinish = () => {
-    const error = onFinalize(tieBreakOrder)
+    const error = onFinalize(exactTieGroups.length > 0 ? tieBreakOrder : undefined)
     if (error) {
       setModalError(error)
       return
