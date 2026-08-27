@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+.npm-cache/
+
+# Build output
+dist/
+
+# Local tooling
+*.local
+*.log
+.DS_Store
+Thumbs.db
+
+# App backups
+outputs/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
