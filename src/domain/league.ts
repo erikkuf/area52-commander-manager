@@ -129,10 +129,15 @@ export function findExactLeagueTieGroups(
   return groups.filter((group) => group.length > 1)
 }
 
-export function buildLeagueLeaderboard(
+interface LeagueLeaderboardBuildOptions {
+  respectFinalizedOrder: boolean
+}
+
+function buildLeagueLeaderboardInternal(
   tournaments: Tournament[],
   leaguePeriod: LeaguePeriod,
   ledger: LeaguePrizeLedger,
+  options: LeagueLeaderboardBuildOptions,
 ): LeagueLeaderboardEntry[] {
   const totals = new Map<string, LeagueStandingAccumulator>()
 
@@ -159,7 +164,7 @@ export function buildLeagueLeaderboard(
       current.playerName = participant.name
       current.leaguePoints += entry.totalPoints
       current.achievementPoints += entry.achievementPoints
-      current.participations += 1
+      current.participations += entry.savedTables > 0 ? 1 : 0
       current.tableWins += entry.tableWins
       current.eliminations += entry.eliminations
       totals.set(participant.playerKey, current)
@@ -186,7 +191,7 @@ export function buildLeagueLeaderboard(
 
   const ordered = [...totals.values()].sort(
     (first, second) =>
-      (leaguePeriod.status === 'finished'
+      (options.respectFinalizedOrder && leaguePeriod.status === 'finished'
         ? officialOrderIndex(leaguePeriod, first.playerKey) -
           officialOrderIndex(leaguePeriod, second.playerKey)
         : 0) ||
@@ -228,6 +233,26 @@ export function buildLeagueLeaderboard(
       totalCredit: entry.dateCreditEarned + monthlyPrize,
       totalCreditStatus: monthlyPrizeStatus,
     }
+  })
+}
+
+export function buildLeagueLeaderboard(
+  tournaments: Tournament[],
+  leaguePeriod: LeaguePeriod,
+  ledger: LeaguePrizeLedger,
+): LeagueLeaderboardEntry[] {
+  return buildLeagueLeaderboardInternal(tournaments, leaguePeriod, ledger, {
+    respectFinalizedOrder: true,
+  })
+}
+
+export function buildTheoreticalLeagueLeaderboard(
+  tournaments: Tournament[],
+  leaguePeriod: LeaguePeriod,
+  ledger: LeaguePrizeLedger,
+): LeagueLeaderboardEntry[] {
+  return buildLeagueLeaderboardInternal(tournaments, leaguePeriod, ledger, {
+    respectFinalizedOrder: false,
   })
 }
 
@@ -497,7 +522,7 @@ export function buildLeagueFinancialDifferences(
   leaguePeriod: LeaguePeriod,
   ledger: LeaguePrizeLedger,
 ): FinancialCreditDifference[] {
-  const leaderboard = buildLeagueLeaderboard(tournaments, { ...leaguePeriod, status: 'active' }, ledger)
+  const leaderboard = buildTheoreticalLeagueLeaderboard(tournaments, leaguePeriod, ledger)
   const pool = calculateLeaguePoolSummary(ledger.contributions, leaguePeriod.id).monthlyFinalizedPool
   const distribution = pool > 0
     ? calculatePrizeDistribution(pool, leaguePeriod.monthlyPrizePercentages)

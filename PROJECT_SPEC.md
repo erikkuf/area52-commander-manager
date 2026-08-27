@@ -21,7 +21,7 @@ La Alpha 0.1 se considera útil si permite realizar una fecha completa de Comman
 5. Guardar y corregir resultados.
 6. Finalizar una ronda.
 7. Generar rondas posteriores.
-8. Ver leaderboard de la fecha/mes.
+8. Ver el Standing de la fecha y el Leaderboard de la liga/mes.
 9. Calcular créditos según pozos y porcentajes.
 10. Registrar crédito utilizado y actualizar el saldo disponible.
 11. Recuperar el estado del torneo ante cierre accidental o pérdida temporal de conexión.
@@ -643,6 +643,11 @@ interface SpecialPointMovement {
 
 `Leaderboard` es la clasificación agregada de un `LeaguePeriod`: suma los resultados de sus fechas, logros acumulados y movimientos activos de puntos especiales.
 
+Para estadísticas competitivas, una participación o fecha jugada se cuenta únicamente cuando el
+jugador tiene al menos una mesa con resultados confirmados (`savedTables > 0`). La inscripción o un
+DROP previo a jugar no aumentan `LeagueLeaderboardEntry.participations` ni
+`LeagueChampionSnapshot.tournamentsPlayed`.
+
 Campos mínimos:
 - Posición.
 - Jugador.
@@ -671,6 +676,12 @@ Una liga finalizada puede conservar `finalizedLeaderboardPlayerKeys` como snapsh
 representar un desempate administrativo ya resuelto (por ejemplo, sorteo). Ese snapshot no reemplaza
 las métricas ni se usa automáticamente en ligas activas; las comparaciones teóricas se reconstruyen
 con los criterios competitivos.
+
+`buildLeagueLeaderboard` conserva el orden oficial/histórico de una liga finalizada mediante
+`finalizedLeaderboardPlayerKeys`. `buildTheoreticalLeagueLeaderboard` reconstruye el orden deportivo
+actual sin imponer ese snapshot, utilizando resultados confirmados, puntos especiales activos y los
+desempates competitivos. `administrativeLeaderboardPlayerKeys` puede resolver únicamente un empate
+competitivo exacto. Ninguno de estos cálculos modifica movimientos de crédito.
 
 Antes de finalizar una liga, los empates exactos pueden ordenarse dentro de su propio grupo. La
 acción no puede mover a un jugador por sobre otro con mejores métricas competitivas. El orden
@@ -834,7 +845,7 @@ Mostrar:
 
 ### Navegación dentro de la misma vista
 - `MESAS`
-- `LEADERBOARD`
+- `STANDING`
 - `CONFIGURACIÓN`
 
 No deben ser rutas/páginas separadas si no es necesario.
@@ -1108,7 +1119,7 @@ La Alpha 0.1 se puede considerar lista para una prueba real cuando:
 8. No se puede cerrar una ronda incompleta sin advertencia explícita.
 9. Drops funcionan sin borrar historial previo.
 10. Correcciones recalculan resultados.
-11. La leaderboard se actualiza.
+11. El Standing del Tournament y el Leaderboard de la liga se actualizan desde resultados confirmados.
 12. Los créditos por posición se calculan desde pozo + porcentajes.
 13. Se muestran por separado crédito consolidado de fechas, mensual proyectado/final, total proyectado/final, utilizado y disponible.
 14. Se puede registrar uso de crédito.
@@ -1148,10 +1159,10 @@ La Alpha 0.1 se puede considerar lista para una prueba real cuando:
 - Guardar mesa.
 - Finalizar ronda.
 - Correcciones.
-- Leaderboard en vivo a partir de resultados guardados.
+- Standing en vivo a partir de resultados guardados.
 - Drops entre rondas y generación de la ronda siguiente.
 
-### Sprint 4 — Leaderboard y crédito
+### Sprint 4 — Standing, Leaderboard y crédito
 - Ranking.
 - Desempates base.
 - Pozos y porcentajes.
@@ -1337,9 +1348,13 @@ Cuando exista duda:
 ### 27.2 Correcciones posteriores
 
 - Reabrir o corregir una liga no reemplaza automáticamente el campeón registrado.
-- Si el líder actual difiere del snapshot se muestra una advertencia con ambos nombres.
+- Si el líder teórico actual difiere del snapshot se muestra una advertencia con ambos nombres.
+- El líder teórico se calcula mediante `buildTheoreticalLeagueLeaderboard`, sin imponer el orden
+  histórico de `finalizedLeaderboardPlayerKeys`.
 - Solo `Actualizar campeón oficial`, con confirmación explícita, reemplaza las estadísticas
   deportivas del snapshot.
+- Un empate competitivo exacto sin resolución administrativa válida bloquea la actualización; el
+  fallback alfabético nunca define silenciosamente un nuevo campeón oficial.
 - Esta actualización no modifica `CreditMovement` ni resuelve revisiones financieras.
 - Si cambia la identidad del campeón, la foto y metadata del campeón anterior no se asignan al
   nuevo: el staff decide si elimina el archivo local o lo conserva sin asociación.

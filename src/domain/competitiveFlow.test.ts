@@ -19,7 +19,7 @@ import {
   resolveLeagueFinancialReview,
   synchronizeFinishedTournamentPrizes,
 } from './league'
-import { importParticipants } from './participants'
+import { importParticipants, setParticipantActive } from './participants'
 import { createDefaultLeaguePeriod, upsertLeaguePoolContribution } from './prizes'
 import {
   beginRoundCorrection,
@@ -92,6 +92,24 @@ function finishedEvent(name: string, league?: LeaguePeriod, winnerIndex = 0): To
   return finalizeTournament(finishRound(saved, saved.rounds[0].id))
 }
 
+function finishedEventWithPrePlayDrop(
+  name: string,
+  league: LeaguePeriod,
+  droppedPlayerName: string,
+): Tournament {
+  let setup = importParticipants(
+    setupEvent(name, 1, league),
+    'Dario',
+    ids(`${name}-extra-player`),
+  ).tournament
+  const dropped = setup.participants.find(
+    (participant) => participant.name === droppedPlayerName,
+  )!
+  setup = setParticipantActive(setup, dropped.id, false)
+  const saved = saveRoundWithWinner(activeRound(setup))
+  return finalizeTournament(finishRound(saved, saved.rounds[0].id))
+}
+
 describe('Standing y Leaderboard', () => {
   it('el Standing usa únicamente resultados del Tournament actual', () => {
     const first = finishedEvent('Primero', undefined, 0)
@@ -110,6 +128,58 @@ describe('Standing y Leaderboard', () => {
     const second = finishedEvent('Fecha B', league, 0)
     const ledger: LeaguePrizeLedger = { leaguePeriods: [league], contributions: [], creditMovements: [], specialPointMovements: [], championSnapshots: [] }
     expect(buildLeagueLeaderboard([first, second], league, ledger)[0]).toMatchObject({ playerName: 'Ana', leaguePoints: 6, participations: 2 })
+  })
+
+  it('no cuenta participación si el jugador hizo DROP antes de guardar una mesa', () => {
+    const league = { ...createDefaultLeaguePeriod(ids('league')), id: 'league-no-play' }
+    const tournament = finishedEventWithPrePlayDrop('Fecha sin jugar', league, 'Ana')
+    const ana = tournament.participants.find((participant) => participant.name === 'Ana')!
+    const ledger: LeaguePrizeLedger = {
+      leaguePeriods: [league],
+      contributions: [],
+      creditMovements: [],
+      specialPointMovements: [],
+      championSnapshots: [],
+    }
+
+    expect(buildLeagueLeaderboard([tournament], league, ledger).find(
+      (entry) => entry.playerKey === ana.playerKey,
+    )).toMatchObject({ participations: 0 })
+  })
+
+  it('cuenta una participación con al menos una mesa confirmada', () => {
+    const league = { ...createDefaultLeaguePeriod(ids('league')), id: 'league-played-once' }
+    const tournament = finishedEvent('Fecha jugada', league)
+    const ana = tournament.participants.find((participant) => participant.name === 'Ana')!
+    const ledger: LeaguePrizeLedger = {
+      leaguePeriods: [league],
+      contributions: [],
+      creditMovements: [],
+      specialPointMovements: [],
+      championSnapshots: [],
+    }
+
+    expect(buildLeagueLeaderboard([tournament], league, ledger).find(
+      (entry) => entry.playerKey === ana.playerKey,
+    )).toMatchObject({ participations: 1 })
+  })
+
+  it('cuenta solamente las fechas con mesas confirmadas entre varias fechas', () => {
+    const league = { ...createDefaultLeaguePeriod(ids('league')), id: 'league-mixed-play' }
+    const played = finishedEvent('Fecha jugada del mes', league)
+    const dropped = finishedEventWithPrePlayDrop('Fecha con drop previo', league, 'Ana')
+    const ana = played.participants.find((participant) => participant.name === 'Ana')!
+    const ledger: LeaguePrizeLedger = {
+      leaguePeriods: [league],
+      contributions: [],
+      creditMovements: [],
+      specialPointMovements: [],
+      championSnapshots: [],
+    }
+
+    expect(buildLeagueLeaderboard([played, dropped], league, ledger).find(
+      (entry) => entry.playerKey === ana.playerKey,
+    )).toMatchObject({ participations: 1 })
   })
 
   it('puntos especiales no afectan Standing y sí afectan Leaderboard', () => {

@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest'
 import {
   assessChampionSnapshotReadiness,
+  assessOfficialChampionUpdateReadiness,
   buildLeagueChampionSnapshot,
   createMissingLeagueChampionSnapshot,
   currentChampionDiffers,
   updateChampionSnapshotMetadata,
   updateOfficialLeagueChampion,
 } from './hallOfFame'
-import { buildLeagueLeaderboard, finishLeaguePeriod, reopenLeaguePeriod } from './league'
+import {
+  buildLeagueLeaderboard,
+  buildTheoreticalLeagueLeaderboard,
+  finishLeaguePeriod,
+  reopenLeaguePeriod,
+} from './league'
 import { importParticipants } from './participants'
 import { createDefaultLeaguePeriod, upsertLeaguePoolContribution } from './prizes'
 import { saveTableResults, updatePlayerResult } from './results'
@@ -266,6 +272,108 @@ describe('Hall of Fame y snapshots oficiales', () => {
       leaguePoints: 12,
     })
     expect(updated.creditMovements).toEqual(movementsBefore)
+  })
+
+  it('separa el campeón oficial del líder teórico después de una corrección', () => {
+    const { ledger, tournament, ana } = scenario()
+    const snapshot = ledger.championSnapshots[0]
+    const beto = tournament.participants.find(
+      (participant) => participant.name === 'Beto Segundo',
+    )!
+    const correctedTournament: Tournament = {
+      ...tournament,
+      rounds: tournament.rounds.map((round) => ({
+        ...round,
+        tables: round.tables.map((table) => ({
+          ...table,
+          results: table.results.map((result) => ({
+            ...result,
+            rotating1: result.participantId === beto.id,
+            wonTable: result.participantId === beto.id,
+            eliminations: result.participantId === beto.id ? 2 : 0,
+            survived: result.participantId === beto.id,
+            achievementPoints: result.participantId === beto.id ? 7 : 0,
+          })),
+          savedResults: table.savedResults.map((result) => ({
+            ...result,
+            rotating1: result.participantId === beto.id,
+            wonTable: result.participantId === beto.id,
+            eliminations: result.participantId === beto.id ? 2 : 0,
+            survived: result.participantId === beto.id,
+            achievementPoints: result.participantId === beto.id ? 7 : 0,
+          })),
+        })),
+      })),
+    }
+    const correctedLedger: LeaguePrizeLedger = {
+      ...ledger,
+      leaguePeriods: ledger.leaguePeriods.map((period) => ({
+        ...period,
+        reviewRequired: true,
+        financialReviewRequired: true,
+      })),
+    }
+    const period = correctedLedger.leaguePeriods[0]
+    const official = buildLeagueLeaderboard(
+      [correctedTournament],
+      period,
+      correctedLedger,
+    )
+    const theoretical = buildTheoreticalLeagueLeaderboard(
+      [correctedTournament],
+      period,
+      correctedLedger,
+    )
+
+    expect(snapshot.playerKey).toBe(ana.playerKey)
+    expect(official[0].playerKey).toBe(ana.playerKey)
+    expect(theoretical[0].playerKey).toBe(beto.playerKey)
+    expect(currentChampionDiffers(snapshot, theoretical)).toBe(true)
+    expect(correctedLedger.championSnapshots[0].playerKey).toBe(ana.playerKey)
+
+    const movementsBefore = correctedLedger.creditMovements
+    const updated = updateOfficialLeagueChampion(
+      correctedLedger,
+      snapshot.id,
+      period,
+      theoretical,
+      [correctedTournament],
+    )
+    expect(updated.championSnapshots[0]).toMatchObject({
+      playerKey: beto.playerKey,
+      playerName: 'Beto Segundo',
+      leaguePoints: 7,
+    })
+    expect(updated.creditMovements).toEqual(movementsBefore)
+    expect(updated.leaguePeriods[0].financialReviewRequired).toBe(true)
+  })
+
+  it('no actualiza al campeón oficial desde un empate teórico sin resolución', () => {
+    const { ledger, tournament } = scenario()
+    const snapshot = ledger.championSnapshots[0]
+    const period = {
+      ...ledger.leaguePeriods[0],
+      administrativeLeaderboardPlayerKeys: undefined,
+    }
+    const beto = tournament.participants.find(
+      (participant) => participant.name === 'Beto Segundo',
+    )!
+    const tied = [
+      fakeEntry(beto.playerKey, beto.name),
+      fakeEntry(snapshot.playerKey, snapshot.playerName, { position: 2 }),
+    ]
+
+    expect(assessOfficialChampionUpdateReadiness(period, tied, [tournament])).toMatchObject({
+      ready: false,
+      reason: 'unresolved_tie',
+    })
+    expect(() => updateOfficialLeagueChampion(
+      ledger,
+      snapshot.id,
+      period,
+      tied,
+      [tournament],
+    )).toThrow(/empate exacto/i)
   })
 
   it('una foto anterior no se asigna al nuevo campeón', () => {

@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import {
   assessChampionSnapshotReadiness,
+  assessOfficialChampionUpdateReadiness,
   createMissingLeagueChampionSnapshot,
   currentChampionDiffers,
   updateChampionSnapshotMetadata,
   updateOfficialLeagueChampion,
 } from '../../domain/hallOfFame'
-import { buildLeagueLeaderboard } from '../../domain/league'
+import {
+  buildLeagueLeaderboard,
+  buildTheoreticalLeagueLeaderboard,
+} from '../../domain/league'
 import type {
   ChampionPhotoReference,
   LeagueChampionSnapshot,
@@ -201,17 +205,18 @@ export function HallOfFameView({
     )
     if (!period) return
     try {
-      if (officialUpdate.championPhoto && photoDisposition === 'delete') {
-        await photoStorage.remove(officialUpdate.championPhoto)
-      }
-      const standings = buildLeagueLeaderboard(tournaments, period, ledger)
-      onLedgerChange(updateOfficialLeagueChampion(
+      const standings = buildTheoreticalLeagueLeaderboard(tournaments, period, ledger)
+      const updatedLedger = updateOfficialLeagueChampion(
         ledger,
         officialUpdate.id,
         period,
         standings,
         tournaments,
-      ))
+      )
+      if (officialUpdate.championPhoto && photoDisposition === 'delete') {
+        await photoStorage.remove(officialUpdate.championPhoto)
+      }
+      onLedgerChange(updatedLedger)
       setOfficialUpdate(null)
       setFeedback('El campeón oficial fue actualizado. Los créditos no fueron modificados.')
       setError(null)
@@ -261,9 +266,14 @@ export function HallOfFameView({
               (item) => item.id === snapshot.leaguePeriodId,
             )
             const standings = period
-              ? buildLeagueLeaderboard(tournaments, period, ledger)
+              ? buildTheoreticalLeagueLeaderboard(tournaments, period, ledger)
               : []
-            const changedChampion = currentChampionDiffers(snapshot, standings)
+            const updateReadiness = period
+              ? assessOfficialChampionUpdateReadiness(period, standings, tournaments)
+              : undefined
+            const changedChampion = Boolean(
+              updateReadiness?.ready && currentChampionDiffers(snapshot, standings),
+            )
             return (
               <article className="champion-card" key={snapshot.id}>
                 <div className="champion-card__media">
@@ -292,6 +302,12 @@ export function HallOfFameView({
                       <strong>⚠ El resultado cambió después del cierre</strong>
                       <span>Actual: {standings[0]?.playerName}</span>
                       <button type="button" onClick={() => { setOfficialUpdate(snapshot); setPhotoDisposition('delete'); setError(null) }}>Actualizar campeón oficial</button>
+                    </div>
+                  )}
+                  {updateReadiness?.reason === 'unresolved_tie' && (
+                    <div className="champion-change-warning">
+                      <strong>⚠ Empate teórico sin resolver</strong>
+                      <span>{updateReadiness.message}</span>
                     </div>
                   )}
                   <div className="champion-card__actions">
@@ -350,7 +366,12 @@ export function HallOfFameView({
 
       {officialUpdate && (() => {
         const period = ledger.leaguePeriods.find((item) => item.id === officialUpdate.leaguePeriodId)
-        const standings = period ? buildLeagueLeaderboard(tournaments, period, ledger) : []
+        const standings = period
+          ? buildTheoreticalLeagueLeaderboard(tournaments, period, ledger)
+          : []
+        const readiness = period
+          ? assessOfficialChampionUpdateReadiness(period, standings, tournaments)
+          : { ready: false, message: 'No se encontró la liga del campeón.' }
         return (
           <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="official-champion-title">
             <button className="modal-backdrop" type="button" aria-label="Cancelar" onClick={() => setOfficialUpdate(null)} />
@@ -358,11 +379,12 @@ export function HallOfFameView({
               <div className="modal-header"><div><p className="section-kicker">Acción administrativa</p><h2 id="official-champion-title">Actualizar campeón oficial</h2></div></div>
               <p className="modal-copy">Esta acción modificará el registro histórico del Hall of Fame. No moverá créditos automáticamente.</p>
               <div className="champion-before-after"><div><span>Antes</span><strong>{officialUpdate.playerName}</strong></div><div><span>Después</span><strong>{standings[0]?.playerName ?? 'Sin campeón'}</strong></div></div>
+              {!readiness.ready && <p className="form-message form-message--error">{readiness.message}</p>}
               {officialUpdate.championPhoto && (
                 <fieldset className="photo-disposition"><legend>Foto del campeón anterior</legend><label><input checked={photoDisposition === 'delete'} name="photo-disposition" type="radio" onChange={() => setPhotoDisposition('delete')} /> Eliminar archivo local</label><label><input checked={photoDisposition === 'keep'} name="photo-disposition" type="radio" onChange={() => setPhotoDisposition('keep')} /> Conservar archivo sin asociarlo</label></fieldset>
               )}
               <p className="form-message form-message--error">El nuevo campeón comenzará sin foto ni metadata de mazo.</p>
-              <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setOfficialUpdate(null)}>Cancelar</button><button className="danger-button" type="button" disabled={!standings[0]} onClick={confirmOfficialUpdate}>Confirmar actualización</button></div>
+              <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setOfficialUpdate(null)}>Cancelar</button><button className="danger-button" type="button" disabled={!readiness.ready} onClick={confirmOfficialUpdate}>Confirmar actualización</button></div>
             </section>
           </div>
         )

@@ -59,6 +59,13 @@ function hasOfficialChampionOrder(
   return leaguePeriod.finalizedLeaderboardPlayerKeys?.[0] === champion.playerKey
 }
 
+function hasAdministrativeChampionOrder(
+  leaguePeriod: LeaguePeriod,
+  champion: LeagueLeaderboardEntry,
+): boolean {
+  return leaguePeriod.administrativeLeaderboardPlayerKeys?.[0] === champion.playerKey
+}
+
 export function assessChampionSnapshotReadiness(
   leaguePeriod: LeaguePeriod,
   standings: LeagueLeaderboardEntry[],
@@ -99,6 +106,37 @@ export function assessChampionSnapshotReadiness(
       ready: false,
       reason: 'unresolved_tie',
       message: 'El primer lugar conserva un empate sin resolución oficial.',
+    }
+  }
+  return { ready: true, champion }
+}
+
+export function assessOfficialChampionUpdateReadiness(
+  leaguePeriod: LeaguePeriod,
+  standings: LeagueLeaderboardEntry[],
+  tournaments: Tournament[],
+): ChampionSnapshotReadiness {
+  const champion = standings[0]
+  if (
+    !champion ||
+    !isRealLeaguePlayer(tournaments, leaguePeriod.id, champion.playerKey)
+  ) {
+    return {
+      ready: false,
+      reason: 'no_champion',
+      message: 'No se pudo determinar un nuevo campeón real desde el Leaderboard teórico.',
+    }
+  }
+  const runnerUp = standings[1]
+  if (
+    runnerUp &&
+    haveEqualChampionTieBreakers(champion, runnerUp) &&
+    !hasAdministrativeChampionOrder(leaguePeriod, champion)
+  ) {
+    return {
+      ready: false,
+      reason: 'unresolved_tie',
+      message: 'El Leaderboard teórico conserva un empate exacto sin resolución administrativa.',
     }
   }
   return { ready: true, champion }
@@ -205,13 +243,15 @@ export function updateOfficialLeagueChampion(
 ): LeaguePrizeLedger {
   const previous = ledger.championSnapshots.find((snapshot) => snapshot.id === snapshotId)
   if (!previous) throw new DomainError('No se encontró el registro del campeón.')
-  const currentChampion = standings[0]
-  if (
-    !currentChampion ||
-    !isRealLeaguePlayer(tournaments, leaguePeriod.id, currentChampion.playerKey)
-  ) {
-    throw new DomainError('No se pudo determinar un nuevo campeón real.')
+  const readiness = assessOfficialChampionUpdateReadiness(
+    leaguePeriod,
+    standings,
+    tournaments,
+  )
+  if (!readiness.ready || !readiness.champion) {
+    throw new DomainError(readiness.message ?? 'No se pudo determinar un nuevo campeón real.')
   }
+  const currentChampion = readiness.champion
   const playerChanged = currentChampion.playerKey !== previous.playerKey
   const replacement: LeagueChampionSnapshot = {
     ...previous,
