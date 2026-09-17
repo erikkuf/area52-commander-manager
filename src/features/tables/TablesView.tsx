@@ -7,8 +7,15 @@ import {
   isWinnerControlDisabled,
   type PlayerResultChanges,
 } from '../../domain/results'
-import { previewTableCorrection, type StandingCorrectionPreview } from '../../domain/competitive'
-import { calculateTournamentStanding } from '../../domain/leaderboard'
+import {
+  previewRoundCorrection,
+  tournamentCorrectionHasFinancialImpact,
+  type StandingCorrectionPreview,
+} from '../../domain/competitive'
+import {
+  calculateTheoreticalTournamentStanding,
+  getExactTournamentStandingTieGroups,
+} from '../../domain/leaderboard'
 import { countSavedTables, isRoundComplete } from '../../domain/rounds'
 import { requiresGhostPairing } from '../../domain/tables'
 import type { Participant, Round, Tournament } from '../../domain/tournament'
@@ -29,12 +36,14 @@ interface TablesViewProps {
     participantId: string,
     changes: PlayerResultChanges,
   ) => void
-  onSaveTable: (roundId: string, tableId: string, historicalCorrection?: boolean) => void
+  onSaveTable: (roundId: string, tableId: string) => void
   onBeginCorrection: (roundId: string, tableId: string) => void
-  onBeginRoundCorrection: (roundId: string, tableId: string) => void
+  onBeginRoundCorrection: (roundId: string) => void
+  onFinalizeRoundCorrection: (roundId: string, administrativeOrder?: string[]) => void
+  onDiscardRoundCorrection: (roundId: string) => void
   onFinishRound: (roundId: string) => void
   onGenerateNextRound: (useGhost?: boolean) => void
-  onFinalizeTournament: () => void
+  onFinalizeTournament: (administrativeOrder?: string[]) => void
 }
 
 interface SwapPlayersModalProps {
@@ -118,6 +127,8 @@ export function TablesView({
   onSaveTable,
   onBeginCorrection,
   onBeginRoundCorrection,
+  onFinalizeRoundCorrection,
+  onDiscardRoundCorrection,
   onFinishRound,
   onGenerateNextRound,
   onFinalizeTournament,
@@ -125,8 +136,10 @@ export function TablesView({
   const [swapSourceId, setSwapSourceId] = useState<string | null>(null)
   const [finishConfirmationOpen, setFinishConfirmationOpen] = useState(false)
   const [selectedRoundNumber, setSelectedRoundNumber] = useState(tournament.currentRound)
-  const [correctionTarget, setCorrectionTarget] = useState<{ roundId: string; tableId: string } | null>(null)
+  const [correctionTargetRoundId, setCorrectionTargetRoundId] = useState<string | null>(null)
   const [correctionPreview, setCorrectionPreview] = useState<StandingCorrectionPreview | null>(null)
+  const [administrativeOrder, setAdministrativeOrder] = useState<string[]>([])
+  const [tieResolutionConfirmed, setTieResolutionConfirmed] = useState(false)
   const [ghostAction, setGhostAction] = useState<'start' | 'next' | null>(null)
   const [finalizeEventOpen, setFinalizeEventOpen] = useState(false)
   useEffect(() => setSelectedRoundNumber(tournament.currentRound), [tournament.currentRound])
@@ -189,10 +202,36 @@ export function TablesView({
   const registeredTables = countSavedTables(tournament, currentRound.id)
   const canFinish = isRoundComplete(tournament, currentRound.id)
   const hasNextRound = isCurrentSelected && tournament.currentRound < tournament.totalRounds
-  const finalStanding = calculateTournamentStanding(tournament)
+  const finalStanding = calculateTheoreticalTournamentStanding(tournament)
+  const exactTieGroups = getExactTournamentStandingTieGroups(tournament)
+  const hasExactTies = exactTieGroups.length > 0
+  const exactTiedParticipantIds = new Set(
+    exactTieGroups.flatMap((group) => group.map((entry) => entry.participantId)),
+  )
   const playersByStandingId = new Map(
     tournament.participants.map((participant) => [participant.id, participant]),
   )
+  const moveAdministrativePlayer = (participantId: string, direction: -1 | 1) => {
+    setAdministrativeOrder((current) => {
+      const tieGroup = exactTieGroups.find((group) =>
+        group.some((entry) => entry.participantId === participantId),
+      )
+      if (!tieGroup) return current
+      const groupIds = new Set(tieGroup.map((entry) => entry.participantId))
+      const orderedGroup = current.filter((id) => groupIds.has(id))
+      const groupIndex = orderedGroup.indexOf(participantId)
+      const targetGroupIndex = groupIndex + direction
+      if (groupIndex < 0 || targetGroupIndex < 0 || targetGroupIndex >= orderedGroup.length) {
+        return current
+      }
+      const index = current.indexOf(participantId)
+      const target = current.indexOf(orderedGroup[targetGroupIndex])
+      const next = [...current]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
+    setTieResolutionConfirmed(false)
+  }
 
   return (
     <section className="tables-view" aria-labelledby="round-title">
@@ -242,7 +281,7 @@ export function TablesView({
 
       {pairingMode && (
         <div className="pairing-notice">
-          <div><strong>Distribución inicial lista · {PAIRING_MODE_LABELS[tournament.pairingMode]}</strong><span>Los resultados se habilitan al confirmar las mesas.</span></div>
+          <div><strong>Distribución inicial lista · {PAIRING_MODE_LABELS[tournament.pairingMode]}</strong><span>{currentRound.wasManuallyAdjusted ? 'Mesas ajustadas manualmente · ' : ''}Los resultados se habilitan al confirmar las mesas.</span></div>
           <button className="primary-button" type="button" onClick={() => onConfirmRound(currentRound.id)}>Confirmar mesas</button>
         </div>
       )}
@@ -265,12 +304,39 @@ export function TablesView({
                 className="secondary-button"
                 type="button"
                 onClick={() => {
-                  const firstSavedTable = currentRound.tables.find((table) => table.status === 'saved')
-                  if (firstSavedTable) setCorrectionTarget({ roundId: currentRound.id, tableId: firstSavedTable.id })
+                  setCorrectionTargetRoundId(currentRound.id)
                 }}
               >
                 Corregir ronda
               </button>
+            )}
+            {correctionMode && (
+              <>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => onDiscardRoundCorrection(currentRound.id)}
+                >
+                  Descartar corrección
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={currentRound.tables.some((table) => table.status !== 'saved')}
+                  onClick={() => {
+                    try {
+                      const preview = previewRoundCorrection(tournament, currentRound.id)
+                      setCorrectionPreview(preview)
+                      setAdministrativeOrder(preview.next.map((entry) => entry.participantId))
+                      setTieResolutionConfirmed(false)
+                    } catch {
+                      // El dominio mostrará el mensaje correspondiente al confirmar.
+                    }
+                  }}
+                >
+                  Finalizar corrección de ronda
+                </button>
+              </>
             )}
             {hasNextRound && (
               <button className="primary-button" type="button" onClick={() => {
@@ -284,7 +350,11 @@ export function TablesView({
               </button>
             )}
             {isCurrentSelected && tournament.status === 'rounds_completed' && (
-              <button className="primary-button" type="button" onClick={() => setFinalizeEventOpen(true)}>
+              <button className="primary-button" type="button" onClick={() => {
+                setAdministrativeOrder(finalStanding.map((entry) => entry.participantId))
+                setTieResolutionConfirmed(false)
+                setFinalizeEventOpen(true)
+              }}>
                 Finalizar evento
               </button>
             )}
@@ -353,16 +423,7 @@ export function TablesView({
                 </p>
                 {!pairingMode && table.status !== 'saved' && (currentRound.status === 'active' || correctionMode) && (
                   <button className="save-table-button" type="button" onClick={() => {
-                    if (correctionMode && table.status === 'edited') {
-                      try {
-                        setCorrectionPreview(previewTableCorrection(tournament, currentRound.id, table.id))
-                        setCorrectionTarget({ roundId: currentRound.id, tableId: table.id })
-                      } catch {
-                        onSaveTable(currentRound.id, table.id, true)
-                      }
-                    } else {
-                      onSaveTable(currentRound.id, table.id)
-                    }
+                    onSaveTable(currentRound.id, table.id)
                   }}>
                     Guardar mesa
                   </button>
@@ -460,41 +521,60 @@ export function TablesView({
         </div>
       )}
 
-      {correctionTarget && !correctionPreview && (
+      {correctionTargetRoundId && !correctionPreview && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="correct-round-title">
-          <button className="modal-backdrop" type="button" aria-label="Cancelar corrección" onClick={() => setCorrectionTarget(null)} />
+          <button className="modal-backdrop" type="button" aria-label="Cancelar corrección" onClick={() => setCorrectionTargetRoundId(null)} />
           <section className="swap-modal">
             <div className="modal-header"><div><p className="section-kicker">Acción administrativa</p><h2 id="correct-round-title">Corregir ronda finalizada</h2></div></div>
-            <p className="modal-copy">Estás modificando una ronda finalizada. Esta corrección puede modificar el Standing final de esta fecha, la posición de los jugadores, el Leaderboard de la liga y créditos ya consolidados.</p>
+            <p className="modal-copy">Se abrirá una sesión de corrección para toda la ronda. Podrás editar y guardar varias mesas; los cambios se consolidarán únicamente al usar “Finalizar corrección de ronda”.</p>
             <div className="modal-actions">
-              <button className="secondary-button" type="button" onClick={() => setCorrectionTarget(null)}>Cancelar</button>
+              <button className="secondary-button" type="button" onClick={() => setCorrectionTargetRoundId(null)}>Cancelar</button>
               <button className="danger-button" type="button" onClick={() => {
-                onBeginRoundCorrection(correctionTarget.roundId, correctionTarget.tableId)
-                setCorrectionTarget(null)
+                onBeginRoundCorrection(correctionTargetRoundId)
+                setCorrectionTargetRoundId(null)
               }}>Continuar</button>
             </div>
           </section>
         </div>
       )}
 
-      {correctionTarget && correctionPreview && (
+      {correctionPreview && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="correction-preview-title">
-          <button className="modal-backdrop" type="button" aria-label="Cancelar corrección" onClick={() => { setCorrectionTarget(null); setCorrectionPreview(null) }} />
+          <button className="modal-backdrop" type="button" aria-label="Cerrar comparación" onClick={() => setCorrectionPreview(null)} />
           <section className="swap-modal correction-preview-modal">
-            <div className="modal-header"><div><p className="section-kicker">Comparación deportiva</p><h2 id="correction-preview-title">Confirmar corrección</h2></div></div>
+            <div className="modal-header"><div><p className="section-kicker">Comparación deportiva</p><h2 id="correction-preview-title">Finalizar corrección de ronda</h2></div></div>
             <p className="modal-copy">Esta corrección puede modificar el Standing final{tournament.type === 'league_date' ? ' y el Leaderboard de la liga' : ''}.</p>
             <div className="standing-comparison">
               <div><h3>Standing anterior</h3>{correctionPreview.previous.slice(0, 5).map((entry) => <p key={entry.participantId}>{entry.position}. {entry.playerName} · {entry.totalPoints} pts.</p>)}</div>
               <div><h3>Nuevo Standing</h3>{correctionPreview.next.slice(0, 5).map((entry) => <p key={entry.participantId}>{entry.position}. {entry.playerName} · {entry.totalPoints} pts.</p>)}</div>
             </div>
-            {correctionPreview.changed && <div className="review-banner"><strong>⚠ Esta corrección requiere revisión financiera</strong><span>Los movimientos de crédito consolidados no se modificarán automáticamente.</span></div>}
+            {correctionPreview.changed && tournamentCorrectionHasFinancialImpact(tournament) && <div className="review-banner"><strong>⚠ Esta corrección requiere revisión financiera</strong><span>Los movimientos de crédito consolidados no se modificarán automáticamente.</span></div>}
+            {correctionPreview.changed && !tournamentCorrectionHasFinancialImpact(tournament) && <div className="pairing-notice"><div><strong>Revisión deportiva</strong><span>Este evento no tiene crédito consolidado que revisar.</span></div></div>}
+            {tournament.status === 'finished' && hasExactTies && (
+              <div className="tie-break-panel">
+                <strong>Desempate administrativo requerido</strong>
+                <span>Ordena explícitamente a los jugadores empatados antes de cerrar la corrección.</span>
+                {administrativeOrder.filter((id) => exactTiedParticipantIds.has(id)).map((participantId) => (
+                  <div key={participantId}>
+                    <span>{playersByStandingId.get(participantId)?.name}</span>
+                    <button type="button" onClick={() => moveAdministrativePlayer(participantId, -1)}>↑</button>
+                    <button type="button" onClick={() => moveAdministrativePlayer(participantId, 1)}>↓</button>
+                  </div>
+                ))}
+                <button className="secondary-button" type="button" onClick={() => setTieResolutionConfirmed(true)}>Confirmar este orden</button>
+              </div>
+            )}
             <div className="modal-actions">
-              <button className="secondary-button" type="button" onClick={() => { setCorrectionTarget(null); setCorrectionPreview(null) }}>Cancelar</button>
-              <button className="primary-button" type="button" onClick={() => {
-                onSaveTable(correctionTarget.roundId, correctionTarget.tableId, correctionPreview.changed)
-                setCorrectionTarget(null)
+              <button className="secondary-button" type="button" onClick={() => setCorrectionPreview(null)}>Seguir editando</button>
+              <button className="primary-button" type="button" disabled={tournament.status === 'finished' && hasExactTies && !tieResolutionConfirmed} onClick={() => {
+                onFinalizeRoundCorrection(
+                  currentRound.id,
+                  tournament.status === 'finished' && hasExactTies
+                    ? administrativeOrder
+                    : undefined,
+                )
                 setCorrectionPreview(null)
-              }}>Guardar corrección</button>
+              }}>Confirmar y cerrar sesión</button>
             </div>
           </section>
         </div>
@@ -531,9 +611,26 @@ export function TablesView({
               <div><span>Ganador</span><strong>{playersByStandingId.get(finalStanding[0]?.participantId)?.name ?? 'Sin resultados'}</strong></div>
               {finalStanding.slice(0, 3).map((entry) => <div key={entry.participantId}><span>{entry.position}° · {playersByStandingId.get(entry.participantId)?.name}</span><strong>{entry.totalPoints} pts.</strong></div>)}
             </div>
+            {hasExactTies && (
+              <div className="tie-break-panel">
+                <strong>Desempate administrativo requerido</strong>
+                <span>Los criterios competitivos siguen empatados. Define el orden oficial; el orden alfabético actual es solo visual.</span>
+                {administrativeOrder.filter((id) => exactTiedParticipantIds.has(id)).map((participantId) => (
+                  <div key={participantId}>
+                    <span>{playersByStandingId.get(participantId)?.name}</span>
+                    <button type="button" onClick={() => moveAdministrativePlayer(participantId, -1)}>↑</button>
+                    <button type="button" onClick={() => moveAdministrativePlayer(participantId, 1)}>↓</button>
+                  </div>
+                ))}
+                <button className="secondary-button" type="button" onClick={() => setTieResolutionConfirmed(true)}>Confirmar este orden</button>
+              </div>
+            )}
             <div className="modal-actions">
               <button className="secondary-button" type="button" onClick={() => setFinalizeEventOpen(false)}>Cancelar</button>
-              <button className="danger-button" type="button" onClick={() => { onFinalizeTournament(); setFinalizeEventOpen(false) }}>Finalizar evento</button>
+              <button className="danger-button" type="button" disabled={hasExactTies && !tieResolutionConfirmed} onClick={() => {
+                onFinalizeTournament(hasExactTies ? administrativeOrder : undefined)
+                setFinalizeEventOpen(false)
+              }}>Finalizar evento</button>
             </div>
           </section>
         </div>

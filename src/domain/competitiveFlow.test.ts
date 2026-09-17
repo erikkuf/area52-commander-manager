@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  finalizeRoundCorrectionSession,
   markTournamentFinancialReviewRequired,
   previewTableCorrection,
   recalculateTournamentStanding,
@@ -10,7 +11,10 @@ import {
   assessOfficialChampionUpdateReadiness,
   updateOfficialLeagueChampion,
 } from './hallOfFame'
-import { calculateTournamentStanding } from './leaderboard'
+import {
+  calculateTournamentStanding,
+  compareTournamentStandingMetrics,
+} from './leaderboard'
 import {
   applyDateCreditCorrections,
   buildLeagueDateCreditCorrections,
@@ -291,7 +295,14 @@ describe('Standing y Leaderboard', () => {
   })
 
   it('desempata por eliminaciones cuando victorias y logros siguen iguales', () => {
-    const tournament = activeRound(setupEvent('Desempate eliminaciones'))
+    const setup = setupEvent('Desempate eliminaciones')
+    const tournament = activeRound({
+      ...setup,
+      achievementConfig: {
+        ...setup.achievementConfig,
+        elimination: { ...setup.achievementConfig.elimination, points: 0 },
+      },
+    })
     const round = tournament.rounds[0]
     const table = round.tables[0]
     const [eliminatorId, achievementId] = table.participantIds
@@ -301,14 +312,79 @@ describe('Standing y Leaderboard', () => {
     })
     updated = updatePlayerResult(updated, round.id, table.id, achievementId, {
       rotating1: true,
-      rotating2: true,
-      rotating3: true,
     })
     const saved = saveTableResults(updated, round.id, table.id)
     expect(calculateTournamentStanding(saved).map((entry) => entry.participantId).slice(0, 2)).toEqual([
       eliminatorId,
       achievementId,
     ])
+  })
+
+  it('prioriza más rotativos sobre más eliminaciones con puntos y victorias iguales', () => {
+    const setup = importParticipants(
+      setupEvent('Cantidad de logros rotativos'),
+      'Dario',
+      ids('cantidad-logros-extra'),
+    ).tournament
+    const tournament = activeRound({
+      ...setup,
+      achievementConfig: {
+        ...setup.achievementConfig,
+        elimination: { ...setup.achievementConfig.elimination, points: 1 / 3 },
+      },
+    })
+    const round = tournament.rounds[0]
+    const table = round.tables[0]
+    const [moreRotatingId, moreEliminationsId] = table.participantIds
+    let updated = updatePlayerResult(tournament, round.id, table.id, moreRotatingId, {
+      rotating1: true,
+      rotating2: true,
+      eliminations: 0,
+    })
+    updated = updatePlayerResult(updated, round.id, table.id, moreEliminationsId, {
+      rotating1: true,
+      eliminations: 3,
+    })
+    const saved = saveTableResults(updated, round.id, table.id)
+    const entries = calculateTournamentStanding(saved)
+    const rotatingEntry = entries.find((entry) => entry.participantId === moreRotatingId)!
+    const eliminationEntry = entries.find((entry) => entry.participantId === moreEliminationsId)!
+
+    expect(rotatingEntry).toMatchObject({
+      totalPoints: 2,
+      tableWins: 0,
+      achievementCount: 2,
+      eliminations: 0,
+    })
+    expect(eliminationEntry).toMatchObject({
+      totalPoints: 2,
+      tableWins: 0,
+      achievementCount: 1,
+      eliminations: 3,
+    })
+    expect(entries.indexOf(rotatingEntry)).toBeLessThan(entries.indexOf(eliminationEntry))
+  })
+
+  it('usa cantidad de logros antes que sus puntos como tercer criterio', () => {
+    const higherPointsFewerAchievements = {
+      totalPoints: 10,
+      tableWins: 1,
+      achievementCount: 1,
+      achievementPoints: 8,
+      eliminations: 0,
+    }
+    const lowerPointsMoreAchievements = {
+      totalPoints: 10,
+      tableWins: 1,
+      achievementCount: 2,
+      achievementPoints: 6,
+      eliminations: 0,
+    }
+
+    expect(compareTournamentStandingMetrics(
+      higherPointsFewerAchievements,
+      lowerPointsMoreAchievements,
+    )).toBeGreaterThan(0)
   })
 
   it('un snapshot oficial conserva un desempate administrativo de una liga finalizada', () => {
@@ -634,7 +710,7 @@ describe('finalización y rondas históricas', () => {
     const round = event.rounds[0]
     expect(() => beginTableCorrection(event, round.id, round.tables[0].id)).toThrow(/Corregir ronda/)
     const correcting = beginTableCorrection(beginRoundCorrection(event, round.id), round.id, round.tables[0].id)
-    expect(correcting.rounds[0]).toMatchObject({ status: 'finished', isCorrectionMode: true, wasEditedAfterFinish: true })
+    expect(correcting.rounds[0]).toMatchObject({ status: 'finished', isCorrectionMode: true, wasEditedAfterFinish: false })
   })
 
   it('compara Standing anterior/nuevo y recalcula al guardar la corrección', () => {
@@ -661,6 +737,105 @@ describe('finalización y rondas históricas', () => {
       rounds: event.rounds.map((round) => ({ ...round, tables: round.tables.map((table) => ({ ...table, results: table.results.map((result) => ({ ...result, achievementPoints: 999 })), savedResults: table.savedResults.map((result) => ({ ...result, achievementPoints: 999 })) })) })),
     }
     expect(calculateTournamentStanding(recalculateTournamentStanding(corrupted))[0].achievementPoints).toBe(3)
+  })
+
+  it('solo guarda desempate administrativo cuando existe un empate competitivo exacto', () => {
+    let active = activeRound(setupEvent('Sin empate'))
+    const round = active.rounds[0]
+    const table = round.tables[0]
+    active = updatePlayerResult(active, round.id, table.id, table.participantIds[0], { wonTable: true })
+    active = updatePlayerResult(active, round.id, table.id, table.participantIds[1], { rotating1: true })
+    const saved = round.tables.reduce(
+      (current, currentTable) => saveTableResults(current, round.id, currentTable.id),
+      active,
+    )
+    const completed = finishRound(saved, round.id)
+    const proposedOrder = completed.participants.map((participant) => participant.id).reverse()
+    const finished = finalizeTournament(completed, undefined, proposedOrder)
+    expect(finished.administrativeStandingParticipantIds).toBeUndefined()
+  })
+
+  it('aplica una resolución explícita y una corrección invalida el contexto anterior', () => {
+    const active = activeRound(setupEvent('Empate independiente'))
+    const round = active.rounds[0]
+    const saved = round.tables.reduce(
+      (current, currentTable) => saveTableResults(current, round.id, currentTable.id),
+      active,
+    )
+    const completed = finishRound(saved, round.id)
+    const oldOrder = completed.participants.map((participant) => participant.id).reverse()
+    const finished = finalizeTournament(completed, undefined, oldOrder)
+    expect(finished.administrativeStandingParticipantIds).toEqual(oldOrder)
+    expect(calculateTournamentStanding(finished)[0].participantId).toBe(oldOrder[0])
+
+    let correcting = beginTableCorrection(
+      beginRoundCorrection(finished, round.id),
+      round.id,
+      round.tables[0].id,
+    )
+    const improvedId = round.tables[0].participantIds[0]
+    correcting = updatePlayerResult(
+      correcting,
+      round.id,
+      round.tables[0].id,
+      improvedId,
+      { rotating1: true },
+    )
+    correcting = saveTableResults(correcting, round.id, round.tables[0].id)
+    const unresolved = finalizeRoundCorrectionSession(correcting, round.id)
+    expect(unresolved.administrativeStandingParticipantIds).toBeUndefined()
+
+    let resolvingAgain = beginTableCorrection(
+      beginRoundCorrection(finished, round.id),
+      round.id,
+      round.tables[0].id,
+    )
+    resolvingAgain = updatePlayerResult(
+      resolvingAgain,
+      round.id,
+      round.tables[0].id,
+      improvedId,
+      { rotating1: true },
+    )
+    resolvingAgain = saveTableResults(resolvingAgain, round.id, round.tables[0].id)
+    const remainingTie = oldOrder.filter((participantId) => participantId !== improvedId).reverse()
+    const newOrder = [improvedId, ...remainingTie]
+    const resolved = finalizeRoundCorrectionSession(resolvingAgain, round.id, newOrder)
+    expect(resolved.administrativeStandingParticipantIds).toEqual(remainingTie)
+  })
+
+  it('una corrección sin pozo no activa revisión financiera', () => {
+    const setup = importParticipants(
+      createTournament({
+        name: 'Evento sin crédito',
+        date: '2026-09-07',
+        totalRounds: 1,
+        rotating1: 'R1',
+        rotating2: 'R2',
+        rotating3: 'R3',
+        type: 'independent',
+        prizeMode: 'none',
+        prizePool: 0,
+        percentagesByPosition: [50, 30, 20],
+      }, ids('no-credit')),
+      'Jugador A\nJugador B\nJugador C',
+      ids('no-credit-players'),
+    ).tournament
+    const activeEvent = activeRound(setup)
+    const savedEvent = saveRoundWithWinner(activeEvent)
+    const event = finalizeTournament(finishRound(savedEvent, activeEvent.rounds[0].id))
+    const eventRound = event.rounds[0]
+    let correcting = beginTableCorrection(
+      beginRoundCorrection(event, eventRound.id),
+      eventRound.id,
+      eventRound.tables[0].id,
+    )
+    const winner = eventRound.tables[0].results.find((result) => result.wonTable)!
+    const other = eventRound.tables[0].results.find((result) => !result.wonTable)!
+    correcting = updatePlayerResult(correcting, eventRound.id, eventRound.tables[0].id, winner.participantId, { wonTable: false })
+    correcting = updatePlayerResult(correcting, eventRound.id, eventRound.tables[0].id, other.participantId, { wonTable: true })
+    correcting = saveTableResults(correcting, eventRound.id, eventRound.tables[0].id)
+    expect(finalizeRoundCorrectionSession(correcting, eventRound.id).financialReviewRequired).toBe(false)
   })
 })
 

@@ -54,7 +54,10 @@ export interface Round {
   status: RoundStatus
   tables: CommanderTable[]
   isCorrectionMode: boolean
+  correctionBaseline?: CommanderTable[]
+  correctionStartedAt?: string
   wasEditedAfterFinish: boolean
+  wasManuallyAdjusted: boolean
   lastEditedAt?: string
 }
 
@@ -226,6 +229,7 @@ export interface Tournament {
   dateCreditConfig: CreditPrizeConfig
   participants: Participant[]
   rounds: Round[]
+  administrativeStandingParticipantIds?: string[]
   ghostPairingAuthorized: boolean
   financialReviewRequired: boolean
   financialReviewResolvedAt?: string

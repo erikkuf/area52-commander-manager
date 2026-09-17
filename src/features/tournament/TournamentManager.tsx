@@ -16,14 +16,25 @@ import {
   confirmLateRegistrationPrizePlayers,
 } from '../../domain/prizes'
 import {
-  markTournamentFinancialReviewRequired,
+  finalizeRoundCorrectionSession,
   recalculateTournamentStanding,
   resolveTournamentFinancialReview,
 } from '../../domain/competitive'
 import { buildTournamentFinancialDifferences } from '../../domain/league'
-import { beginRoundCorrection, beginTableCorrection, saveTableResults, updatePlayerResult } from '../../domain/results'
+import {
+  beginRoundCorrection,
+  beginTableCorrection,
+  discardRoundCorrection,
+  saveTableResults,
+  updatePlayerResult,
+} from '../../domain/results'
 import { finalizeTournament, finishRound, generateNextRound } from '../../domain/rounds'
-import { confirmRoundTables, swapRoundPlayers } from '../../domain/tables'
+import {
+  authorizeGhostPairing,
+  confirmRoundTables,
+  disableGhostPairing,
+  swapRoundPlayers,
+} from '../../domain/tables'
 import type {
   LeaguePeriod,
   LeaguePrizeLedger,
@@ -156,30 +167,41 @@ export function TournamentManager({
             onUpdateResult={(roundId, tableId, participantId, changes) => {
               runTournamentChange((current) => updatePlayerResult(current, roundId, tableId, participantId, changes))
             }}
-            onSaveTable={(roundId, tableId, historicalCorrection) => {
-              runTournamentChange(
-                (current) => {
-                  const saved = saveTableResults(current, roundId, tableId)
-                  return historicalCorrection
-                    ? markTournamentFinancialReviewRequired(saved)
-                    : saved
-                },
-                historicalCorrection,
-              )
+            onSaveTable={(roundId, tableId) => {
+              runTournamentChange((current) => saveTableResults(current, roundId, tableId))
             }}
             onBeginCorrection={(roundId, tableId) => {
               runTournamentChange((current) => beginTableCorrection(current, roundId, tableId))
             }}
-            onBeginRoundCorrection={(roundId, tableId) => {
-              runTournamentChange((current) =>
-                beginTableCorrection(beginRoundCorrection(current, roundId), roundId, tableId),
-              )
+            onBeginRoundCorrection={(roundId) => {
+              runTournamentChange((current) => beginRoundCorrection(current, roundId))
+            }}
+            onFinalizeRoundCorrection={(roundId, administrativeOrder) => {
+              try {
+                const next = finalizeRoundCorrectionSession(
+                  tournament,
+                  roundId,
+                  administrativeOrder,
+                )
+                onTournamentChange(next)
+                if (next.financialReviewRequired && tournament.leaguePeriodId) {
+                  onHistoricalCorrection(tournament.leaguePeriodId)
+                }
+                setFeedback(null)
+              } catch (error) {
+                setFeedback(messageFromError(error))
+              }
+            }}
+            onDiscardRoundCorrection={(roundId) => {
+              runTournamentChange((current) => discardRoundCorrection(current, roundId))
             }}
             onFinishRound={(roundId) => {
               runTournamentChange((current) => finishRound(current, roundId))
             }}
             onGenerateNextRound={(useGhost) => runTournamentChange((current) => generateNextRound(current, undefined, undefined, useGhost))}
-            onFinalizeTournament={() => runTournamentChange((current) => finalizeTournament(current))}
+            onFinalizeTournament={(administrativeOrder) => runTournamentChange(
+              (current) => finalizeTournament(current, undefined, administrativeOrder),
+            )}
           />
         )}
         {activeView === 'standing' && (
@@ -232,6 +254,10 @@ export function TournamentManager({
         onRenamePlayer={(participantId, name) => runTournamentChange((current) => renameParticipant(current, participantId, name))}
         onRemovePlayer={(participantId) => runTournamentChange((current) => removeParticipant(current, participantId))}
         onToggleActive={(participantId, active) => runTournamentChange((current) => setParticipantActive(current, participantId, active))}
+        pairingMode={tournament.pairingMode}
+        ghostEnabled={tournament.participants.some((participant) => participant.isGhost && participant.active)}
+        onEnableGhost={() => runTournamentChange((current) => authorizeGhostPairing(current))}
+        onDisableGhost={() => runTournamentChange(disableGhostPairing)}
         onConfirmLateRegistration={() => {
           runTournamentChange((current) => confirmLateRegistrationPrizePlayers(current, pendingLateRegistrationIds))
           setPendingLateRegistrationIds([])

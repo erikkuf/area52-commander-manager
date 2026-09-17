@@ -13,6 +13,7 @@ import {
   authorizeGhostPairing,
   confirmRoundTables,
   createRound,
+  disableGhostPairing,
   requiresGhostPairing,
   swapRoundPlayers,
   validateRoundAssignments,
@@ -26,7 +27,11 @@ function ids(scope: string): IdFactory {
   return (prefix) => `${scope}-${prefix}-${++value}`
 }
 
-function setupWithPlayers(count: number, leaguePeriodId?: string): Tournament {
+function setupWithPlayers(
+  count: number,
+  leaguePeriodId?: string,
+  pairingMode: Tournament['pairingMode'] = 'balanced_random',
+): Tournament {
   const league = leaguePeriodId ? createDefaultLeaguePeriod(ids('default-league')) : undefined
   return importParticipants(
     createTournament(
@@ -34,6 +39,7 @@ function setupWithPlayers(count: number, leaguePeriodId?: string): Tournament {
         name: `Evento ${count}`,
         date: '2026-08-18',
         totalRounds: 3,
+        pairingMode,
         rotating1: 'R1',
         rotating2: 'R2',
         rotating3: 'R3',
@@ -156,12 +162,50 @@ describe('Jugador Fantasma', () => {
     expect(requiresGhostPairing(dropped)).toBe(true)
   })
 
-  it('volver a 6 jugadores elimina la necesidad y no sienta al Ghost', () => {
+  it('con 6 jugadores el Ghost sigue siendo opcional mientras permanezca activo', () => {
     const authorized = authorizeGhostPairing(setupWithPlayers(5), ids('ghost'))
     const withSix = importParticipants(authorized, 'Jugador 6', ids('sixth')).tournament
     expect(requiresGhostPairing(withSix)).toBe(false)
     const round = createRound(withSix, 1, () => 0.5, ids('round'))
-    expect(round.tables.flatMap((table) => table.participantIds).some((id) => authorized.participants.find((participant) => participant.id === id)?.isGhost)).toBe(false)
+    expect(round.tables.flatMap((table) => table.participantIds).some((id) => authorized.participants.find((participant) => participant.id === id)?.isGhost)).toBe(true)
+
+    const withoutGhost = disableGhostPairing(withSix)
+    const nextRound = createRound(withoutGhost, 1, () => 0.5, ids('round-no-ghost'))
+    expect(nextRound.tables.flatMap((table) => table.participantIds).some((id) => withoutGhost.participants.find((participant) => participant.id === id)?.isGhost)).toBe(false)
+  })
+
+  it('permite un Ghost opcional con 3 jugadores reales y puntuar 3 eliminaciones', () => {
+    const started = startTournament(
+      authorizeGhostPairing(setupWithPlayers(3), ids('optional-ghost')),
+      () => 0.5,
+      ids('optional-round'),
+      true,
+    )
+    const active = confirmRoundTables(started, started.rounds[0].id)
+    const table = active.rounds[0].tables[0]
+    expect(table.participantIds).toHaveLength(4)
+    const playerId = table.results[0].participantId
+    const withThreeEliminations = updatePlayerResult(
+      active,
+      active.rounds[0].id,
+      table.id,
+      playerId,
+      { eliminations: 3 },
+    )
+    expect(withThreeEliminations.rounds[0].tables[0].results[0].achievementPoints).toBe(3)
+    expect(() => validateTableResults(withThreeEliminations.rounds[0].tables[0], withThreeEliminations.participants)).not.toThrow()
+  })
+
+  it('rechaza el Jugador Fantasma en modo suizo', () => {
+    const swiss = setupWithPlayers(5, undefined, 'swiss')
+    expect(requiresGhostPairing(swiss)).toBe(false)
+    expect(() => authorizeGhostPairing(swiss, ids('swiss-ghost'))).toThrow(/Aleatorio equilibrado/)
+  })
+
+  it('no permite quitar el Ghost mientras ocupa una ronda abierta', () => {
+    const tournament = authorizeGhostPairing(setupWithPlayers(3), ids('open-ghost'))
+    const started = startTournament(tournament, () => 0.5, ids('open-round'), true)
+    expect(() => disableGhostPairing(started)).toThrow(/Ronda 1/)
   })
 
   it('conserva el Ghost dentro del historial de la ronda', () => {
@@ -182,6 +226,7 @@ describe('Jugador Fantasma', () => {
     expect(swapped.rounds[0].tables.map((table) => table.participantIds.length)).toEqual([3, 3])
     expect(new Set(idsAfter).size).toBe(6)
     expect(idsAfter.filter((id) => id === ghostId)).toHaveLength(1)
+    expect(swapped.rounds[0].wasManuallyAdjusted).toBe(true)
   })
 
   it('rota primero a jugadores que no compartieron mesa con el Ghost', () => {

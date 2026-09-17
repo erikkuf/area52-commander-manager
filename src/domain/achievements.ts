@@ -92,6 +92,22 @@ export function calculateAchievementPoints(
   )
 }
 
+/**
+ * Cuenta exclusivamente los logros rotativos obtenidos y habilitados.
+ * Victoria, eliminaciones y supervivencia aportan puntos según su configuración,
+ * pero no forman parte de este criterio de desempate.
+ */
+export function calculateAchievementCount(
+  result: AchievementResult,
+  config: AchievementConfig = DEFAULT_ACHIEVEMENT_CONFIG,
+): number {
+  validateAchievementConfig(config)
+  return ROTATING_ACHIEVEMENT_IDS.reduce((total, id) => {
+    const rule = config[id]
+    return total + (result[id] && rule?.enabled ? 1 : 0)
+  }, 0)
+}
+
 export function achievementPointConfigFromTournament(
   tournament: Tournament,
 ): AchievementConfig {

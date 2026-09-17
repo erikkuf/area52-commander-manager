@@ -56,8 +56,8 @@ describe('workspace e historial local', () => {
 
   it('aumenta schemaVersion y acepta el workspace anterior', () => {
     const workspace = upsertWorkspaceTournament(createEmptyWorkspace(), historicalTournament)
-    const restored = deserializeAppWorkspace(JSON.stringify({ version: 1, workspace }))
-    expect(APP_WORKSPACE_STORAGE_VERSION).toBe(5)
+    const restored = deserializeAppWorkspace(JSON.stringify({ version: 5, workspace }))
+    expect(APP_WORKSPACE_STORAGE_VERSION).toBe(6)
     expect(restored?.tournaments).toHaveLength(1)
   })
 

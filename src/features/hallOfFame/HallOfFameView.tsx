@@ -22,7 +22,6 @@ import {
   type ChampionPhotoFile,
   type ChampionPhotoStorage,
 } from '../../services/championPhotoStorage'
-import { formatTournamentDate } from '../../utils/format'
 
 interface HallOfFameViewProps {
   tournaments: Tournament[]
@@ -283,7 +282,6 @@ export function HallOfFameView({
                 <div className="champion-card__content">
                   <p className="champion-league">{snapshot.leagueName}</p>
                   <h2>{snapshot.playerName}</h2>
-                  <p className="champion-date">Coronado {formatTournamentDate((snapshot.sourceClosedAt ?? snapshot.createdAt).slice(0, 10))}</p>
                   {period?.financialReviewRequired && <span className="review-pill">Liga con revisión pendiente</span>}
                   <dl className="champion-stats">
                     <div><dt>Puntos liga</dt><dd>{snapshot.leaguePoints}</dd></div>

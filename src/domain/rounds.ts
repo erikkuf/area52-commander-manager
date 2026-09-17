@@ -2,9 +2,9 @@ import { DomainError } from './errors'
 import {
   authorizeGhostPairing,
   createRound,
-  requiresGhostPairing,
   type RandomSource,
 } from './tables'
+import { normalizeAdministrativeStandingOrder } from './leaderboard'
 import type { IdFactory, Tournament } from './tournament'
 import { createId } from '../utils/id'
 
@@ -48,7 +48,7 @@ export function generateNextRound(
   tournament: Tournament,
   random: RandomSource = Math.random,
   idFactory: IdFactory = createId,
-  useGhost = tournament.ghostPairingAuthorized && requiresGhostPairing(tournament),
+  useGhost = tournament.ghostPairingAuthorized,
 ): Tournament {
   const currentRound = tournament.rounds.find(
     (round) => round.number === tournament.currentRound,
@@ -82,14 +82,20 @@ export function generateNextRound(
 export function finalizeTournament(
   tournament: Tournament,
   now = new Date().toISOString(),
+  administrativeStandingParticipantIds?: string[],
 ): Tournament {
   if (tournament.status === 'finished') return tournament
   if (tournament.status !== 'rounds_completed') {
     throw new DomainError('Completa todas las rondas antes de finalizar el evento.')
   }
+  const administrativeOrder = normalizeAdministrativeStandingOrder(
+    tournament,
+    administrativeStandingParticipantIds,
+  )
   return {
     ...tournament,
     status: 'finished',
+    administrativeStandingParticipantIds: administrativeOrder,
     finishedAt: now,
     updatedAt: now,
   }

@@ -10,7 +10,11 @@ import {
   buildCreditUsageImportPreview,
   importCreditUsageMovements,
 } from './creditImport'
-import { findExactLeagueTieGroups, haveEqualLeagueTieBreakers } from './league'
+import {
+  compareLeagueLeaderboardMetrics,
+  findExactLeagueTieGroups,
+  haveEqualLeagueTieBreakers,
+} from './league'
 import { buildPlayerRegistry, mergePlayerIdentities, resolveRegisteredPlayerKey } from './playerRegistry'
 import { createDefaultLeaguePrizeLedger } from './prizes'
 import { createEmptyWorkspace } from './workspace'
@@ -119,6 +123,7 @@ describe('desempate administrativo exacto', () => {
     position: 1,
     leaguePoints: points,
     achievementPoints: 8,
+    achievementCount: 5,
     specialLeaguePoints: 0,
     participations: 2,
     dateCreditEarned: 0,
@@ -137,6 +142,18 @@ describe('desempate administrativo exacto', () => {
     const carla = entry('carla', 'Carla', 9)
     expect(haveEqualLeagueTieBreakers(ana, beto)).toBe(true)
     expect(findExactLeagueTieGroups([ana, beto, carla])).toEqual([[ana, beto]])
+  })
+
+  it('prioriza cantidad de logros rotativos aunque el rival tenga más achievementPoints', () => {
+    const morePoints = entry('ana', 'Ana')
+    const moreAchievements = entry('beto', 'Beto')
+    morePoints.achievementPoints = 9
+    morePoints.achievementCount = 3
+    moreAchievements.achievementPoints = 7
+    moreAchievements.achievementCount = 4
+
+    expect(compareLeagueLeaderboardMetrics(morePoints, moreAchievements)).toBeGreaterThan(0)
+    expect(haveEqualLeagueTieBreakers(morePoints, moreAchievements)).toBe(false)
   })
 })
 

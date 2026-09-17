@@ -17,21 +17,29 @@ export function getRealActiveParticipants(tournament: Tournament): Participant[]
 }
 
 export function requiresGhostPairing(tournament: Tournament): boolean {
-  return getRealActiveParticipants(tournament).length === 5
+  return (
+    tournament.pairingMode === 'balanced_random' &&
+    getRealActiveParticipants(tournament).length === 5
+  )
 }
 
 export function authorizeGhostPairing(
   tournament: Tournament,
   idFactory: IdFactory = createId,
 ): Tournament {
-  if (!requiresGhostPairing(tournament)) {
-    throw new DomainError('El Jugador Fantasma solo puede utilizarse con exactamente 5 jugadores reales activos.')
+  if (tournament.status === 'finished') {
+    throw new DomainError('No puedes agregar un Jugador Fantasma a un evento finalizado.')
+  }
+  if (tournament.pairingMode !== 'balanced_random') {
+    throw new DomainError('El Jugador Fantasma solo está disponible en Aleatorio equilibrado.')
   }
   const ghosts = tournament.participants.filter((participant) => participant.isGhost)
   if (ghosts.length > 1) {
     throw new DomainError('Solo puede existir un Jugador Fantasma en el evento.')
   }
-  if (ghosts.length === 1 && tournament.ghostPairingAuthorized) return tournament
+  if (ghosts.length === 1 && ghosts[0].active && tournament.ghostPairingAuthorized) {
+    return tournament
+  }
   const ghost: Participant = ghosts[0] ?? {
     id: idFactory('ghost'),
     playerKey: `ghost:${tournament.id}`,
@@ -42,7 +50,38 @@ export function authorizeGhostPairing(
   return {
     ...tournament,
     ghostPairingAuthorized: true,
-    participants: ghosts.length === 0 ? [...tournament.participants, ghost] : tournament.participants,
+    participants:
+      ghosts.length === 0
+        ? [...tournament.participants, ghost]
+        : tournament.participants.map((participant) =>
+            participant.isGhost ? { ...participant, active: true } : participant,
+          ),
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+export function disableGhostPairing(tournament: Tournament): Tournament {
+  if (tournament.status === 'finished') {
+    throw new DomainError('No puedes quitar el Jugador Fantasma de un evento finalizado.')
+  }
+  const ghost = tournament.participants.find((participant) => participant.isGhost)
+  if (!ghost) return { ...tournament, ghostPairingAuthorized: false }
+  const openRoundWithGhost = tournament.rounds.find(
+    (round) =>
+      round.status !== 'finished' &&
+      round.tables.some((table) => table.participantIds.includes(ghost.id)),
+  )
+  if (openRoundWithGhost) {
+    throw new DomainError(
+      `El Jugador Fantasma ya está sentado en la Ronda ${openRoundWithGhost.number}. Termina esa ronda antes de quitarlo de las siguientes.`,
+    )
+  }
+  return {
+    ...tournament,
+    ghostPairingAuthorized: false,
+    participants: tournament.participants.map((participant) =>
+      participant.id === ghost.id ? { ...participant, active: false } : participant,
+    ),
     updatedAt: new Date().toISOString(),
   }
 }
@@ -98,19 +137,24 @@ export function createRound(
   roundNumber: number,
   random: RandomSource = Math.random,
   idFactory: IdFactory = createId,
-  useGhost = tournament.ghostPairingAuthorized && requiresGhostPairing(tournament),
+  useGhost = tournament.ghostPairingAuthorized,
 ): Round {
   const realParticipants = getRealActiveParticipants(tournament)
-  if (realParticipants.length === 5 && !useGhost) {
+  if (realParticipants.length < 3) {
+    throw new DomainError('Se necesitan al menos 3 jugadores reales activos para generar una ronda.')
+  }
+  if (tournament.pairingMode === 'swiss' && useGhost) {
+    throw new DomainError('El Jugador Fantasma no está permitido en emparejamiento suizo.')
+  }
+  if (requiresGhostPairing(tournament) && !useGhost) {
     throw new DomainError(
       'Hay 5 jugadores activos. Autoriza el Jugador Fantasma para generar dos mesas de 3.',
     )
   }
-  if (useGhost && realParticipants.length !== 5) {
-    throw new DomainError('El Jugador Fantasma solo es necesario con exactamente 5 jugadores reales activos.')
-  }
-  const ghost = tournament.participants.find((participant) => participant.isGhost)
-  if (useGhost && !ghost) {
+  const ghost = tournament.participants.find(
+    (participant) => participant.isGhost && participant.active,
+  )
+  if (useGhost && (!ghost || !tournament.ghostPairingAuthorized)) {
     throw new DomainError('Autoriza el Jugador Fantasma antes de generar la ronda.')
   }
   const activeParticipants = useGhost && ghost ? [...realParticipants, ghost] : realParticipants
@@ -143,6 +187,7 @@ export function createRound(
     tables,
     isCorrectionMode: false,
     wasEditedAfterFinish: false,
+    wasManuallyAdjusted: false,
   }
   validateRoundAssignments(round, activeParticipants)
   return round
@@ -242,7 +287,7 @@ export function swapRoundPlayers(
     }
   })
 
-  const updatedRound = { ...round, tables }
+  const updatedRound = { ...round, tables, wasManuallyAdjusted: true }
   validateRoundAssignments(updatedRound, activeParticipants)
 
   return {

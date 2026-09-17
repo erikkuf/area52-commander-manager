@@ -156,6 +156,14 @@ export function updateTournamentConfiguration(
 
   const nextConfig = normalizedConfig(input, tournament.achievementConfig)
   if (
+    nextConfig.pairingMode === 'swiss' &&
+    tournament.participants.some((participant) => participant.isGhost && participant.active)
+  ) {
+    throw new DomainError(
+      'Quita el Jugador Fantasma antes de cambiar el emparejamiento a Suizo multijugador.',
+    )
+  }
+  if (
     tournament.status !== 'setup' &&
     (nextConfig.type !== tournament.type || nextConfig.leaguePeriodId !== tournament.leaguePeriodId)
   ) {
@@ -193,16 +201,27 @@ export function updateTournamentConfiguration(
 
   const remainingRounds = tournament.rounds.filter((round) => round.number <= input.totalRounds)
   const nextCurrentRound = Math.min(tournament.currentRound, input.totalRounds)
+  const completedRounds = remainingRounds.filter((round) => round.status === 'finished').length
+  const nextStatus =
+    tournament.status === 'finished' || tournament.status === 'setup'
+      ? tournament.status
+      : completedRounds >= input.totalRounds
+        ? ('rounds_completed' as const)
+        : tournament.status === 'rounds_completed'
+          ? ('active' as const)
+          : tournament.status
   let updated: Tournament = {
     ...tournament,
     ...nextConfig,
     rounds: remainingRounds,
     currentRound: nextCurrentRound,
+    status: nextStatus,
     updatedAt: new Date().toISOString(),
   }
 
   if (achievementConfigChanged && options.recalculateResults) {
     updated = recalculateTournamentAchievementPoints(updated, nextConfig.achievementConfig)
+    updated = { ...updated, administrativeStandingParticipantIds: undefined }
   }
 
   if (tournament.status === 'setup') return syncSetupPrizeParticipants(updated)
@@ -214,7 +233,7 @@ export function startTournament(
   tournament: Tournament,
   random: RandomSource = Math.random,
   idFactory: IdFactory = createId,
-  useGhost = false,
+  useGhost = tournament.ghostPairingAuthorized,
 ): Tournament {
   if (tournament.status !== 'setup') {
     throw new DomainError('Este torneo ya fue iniciado.')

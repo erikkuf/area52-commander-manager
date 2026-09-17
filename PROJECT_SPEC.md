@@ -181,6 +181,7 @@ interface Tournament {
 
   participants: Participant[];
   rounds: Round[];
+  administrativeStandingParticipantIds?: string[]; // solo desempates exactos resueltos
   ghostPairingAuthorized: boolean;
   financialReviewRequired: boolean;
   financialReviewResolvedAt?: string;
@@ -238,7 +239,10 @@ interface Round {
   status: RoundStatus;
   tables: CommanderTable[];
   isCorrectionMode: boolean;
+  correctionBaseline?: CommanderTable[]; // snapshot previo para rollback de la sesión
+  correctionStartedAt?: string;
   wasEditedAfterFinish: boolean;
+  wasManuallyAdjusted: boolean;
   lastEditedAt?: string;
 }
 ```
@@ -461,8 +465,10 @@ Alpha 0.1:
 - permitir edición manual/intercambio antes de confirmar.
 - seleccionar al crear cada fecha o torneo independiente uno de dos sistemas:
   - `balanced_random`: distribución aleatoria equilibrada que minimiza rivales repetidos;
-  - `swiss`: sistema suizo multijugador que usa el Standing del Tournament y evita rematches;
+  - `swiss`: sistema suizo multijugador que desde Ronda 2 agrupa secuencialmente según el Standing;
 - la primera ronda suiza se distribuye como aleatoria equilibrada porque todavía no existe puntaje;
+- desde Ronda 2 el historial de rivales no influye en `swiss`; evitar rematches pertenece
+  exclusivamente a `balanced_random`;
 - el modo elegido queda persistido en el Tournament y afecta únicamente rondas futuras;
 - mantener edición manual/intercambio antes de confirmar cualquiera de los dos sistemas.
 
@@ -503,8 +509,13 @@ Reglas:
 - Una ronda finalizada puede corregirse por admin/staff.
 - Una corrección recalcula totales.
 - Las rondas finalizadas se consultan en modo lectura mediante selector de rondas.
-- `Corregir ronda` habilita explícitamente la edición sin cambiar `Round.status`.
-- La confirmación compara el Standing anterior y nuevo; el crédito consolidado no cambia automáticamente.
+- `Corregir ronda` abre una sesión persistente a nivel de ronda sin cambiar `Round.status`.
+- varias mesas pueden editarse y guardarse dentro de la misma sesión; guardar una mesa no cierra
+  la corrección;
+- `Finalizar corrección de ronda` es la única acción que consolida el cierre de la sesión;
+- `Descartar corrección` restaura el snapshot previo completo de la ronda;
+- la confirmación final compara el Standing anterior y nuevo una sola vez; el crédito consolidado no
+  cambia automáticamente.
 
 ### 7.6 Siguiente ronda
 Usar participantes activos.
@@ -543,18 +554,26 @@ Ejemplos:
 La función debe funcionar para cantidades mayores siguiendo la misma regla.
 
 ### Regla de error
-Con menos de 3 participantes activos no se puede generar una ronda válida.
+Con menos de 3 jugadores reales activos no se puede generar una ronda válida; el Fantasma no
+reemplaza este mínimo competitivo.
 
-### 8.1 Jugador Fantasma para exactamente cinco jugadores
+### 8.1 Jugador Fantasma opcional
 
-- Cinco jugadores reales no forman una distribución válida de mesas de 3/4.
-- Tras confirmación administrativa se agrega un único `Participant` con `isGhost = true` para producir `3 + 3`.
-- El Fantasma es contexto operativo de la ronda, no una inscripción permanente ni un participante competitivo.
+- Solo está disponible con `pairingMode = "balanced_random"`; nunca se ofrece ni se permite en
+  `swiss`.
+- Puede activarse opcionalmente con cualquier cantidad de jugadores reales mientras el torneo no
+  esté finalizado. La suma de asientos debe seguir admitiendo mesas válidas de 3/4.
+- Cinco jugadores reales no forman una distribución válida; con un Fantasma producen `3 + 3`.
+- Existe como máximo un Fantasma activo por Tournament y puede activarse/desactivarse desde la
+  gestión de participantes. Si ya está sentado en una ronda pendiente, no puede quitarse sin resolver
+  primero esa ronda.
+- El Fantasma es contexto operativo de las rondas, no una inscripción ni participante competitivo.
 - No tiene `PlayerResult`, controles de logros, Standing, Leaderboard, puntos especiales, crédito, participación ni aporte a pozos.
 - Aunque no tenga `PlayerResult`, el Fantasma sí es un oponente eliminable: eliminarlo aumenta en 1 el contador de eliminaciones del jugador real y otorga los puntos configurados para ese logro.
 - El máximo de eliminaciones de un jugador se calcula desde los demás asientos de la mesa, incluyendo el asiento Fantasma, con límite general 0..3.
 - `prizePlayerCount` considera exclusivamente jugadores reales.
-- En rondas sucesivas se prioriza sentar con el Fantasma a quienes tengan menor exposición previa.
+- En rondas sucesivas de `balanced_random` se prioriza sentar con el Fantasma a quienes tengan menor
+  exposición previa.
 - Puede intercambiarse antes de confirmar mesas, conservando una sola instancia y mesas válidas.
 - El historial preserva su mesa para reconstruir la ronda.
 
@@ -665,12 +684,19 @@ Campos mínimos:
 El sistema debe permitir una estrategia ordenada de desempate.
 
 Orden competitivo Alpha 0.1:
-1. puntaje principal;
+1. puntos totales;
 2. mayor cantidad de victorias de mesa;
-3. mayor cantidad/puntos de logros obtenidos;
+3. mayor cantidad de logros obtenidos;
 4. mayor cantidad de eliminaciones;
 5. resolución administrativa explícita cuando todos los criterios anteriores siguen empatados;
 6. orden alfabético y clave estable únicamente como fallback de visualización antes de resolver.
+
+La cantidad de logros se deriva de los hechos confirmados y del snapshot `AchievementConfig` del
+Tournament, sin persistir un contador duplicado. `achievementCount` cuenta exclusivamente los logros
+rotativos obtenidos y habilitados (`rotating1` a `rotating5`); no incluye victorias, eliminaciones ni
+supervivencia. Esos hechos continúan aportando puntos según `AchievementConfig`, mientras que las
+victorias y eliminaciones mantienen sus propios criterios de desempate. `achievementPoints` continúa
+formando parte de los puntos totales, pero no se reutiliza como tercer criterio.
 
 Una liga finalizada puede conservar `finalizedLeaderboardPlayerKeys` como snapshot oficial para
 representar un desempate administrativo ya resuelto (por ejemplo, sorteo). Ese snapshot no reemplaza
@@ -694,6 +720,12 @@ Antes de finalizar una liga, los empates exactos pueden ordenarse dentro de su p
 acción no puede mover a un jugador por sobre otro con mejores métricas competitivas. El orden
 elegido se conserva en `administrativeLeaderboardPlayerKeys` y el cierre oficial en
 `finalizedLeaderboardPlayerKeys`.
+
+Los Tournament independientes utilizan la misma distinción: sus criterios competitivos se aplican
+primero y `administrativeStandingParticipantIds` solo puede ordenar jugadores que continúan en un
+empate exacto. No se persiste un orden administrativo si no existía empate. Una corrección posterior
+que cambia las métricas invalida la resolución anterior; nombre y `playerKey` son únicamente fallback
+visual mientras el staff no confirme un nuevo orden.
 
 ### 10.2 Crédito proyectado
 Mientras el mes no esté cerrado:
@@ -1286,6 +1318,8 @@ Cuando exista duda:
 - Todo impacto deportivo posterior registra `financialReviewLastImpactAt`, limpia la resolución previa
   y reactiva la revisión. Al recuperar datos, si existen puntos especiales o correcciones posteriores a
   `financialReviewResolvedAt`, la revisión vuelve a quedar requerida.
+- Una corrección deportiva en un Tournament independiente con `prizeMode = "none"` no activa
+  `financialReviewRequired`; la revisión deportiva y la financiera son estados distintos.
 
 ### 26.7 Migración competitiva
 
@@ -1335,6 +1369,21 @@ Cuando exista duda:
 - Los torneos y respaldos anteriores reciben `pairingMode = "balanced_random"` para conservar una
   operación segura y mejorar las rondas futuras sin modificar mesas históricas.
 - Los snapshots de torneo versiones 1–7 y workspaces versiones 1–4 siguen siendo compatibles.
+
+### 26.12 Migración de estabilización para eventos reales
+
+- El schema local de Tournament sube a versión 9 y el workspace a versión 6.
+- Snapshots de Tournament versiones 1–8 y workspaces versiones 1–5 siguen siendo compatibles.
+- Rondas antiguas reciben `wasManuallyAdjusted = false`; intercambiar asientos antes de confirmar
+  cambia el flag a `true` sin crear un historial complejo.
+- Se incorporan `correctionBaseline` y `correctionStartedAt` para persistir sesiones de corrección.
+  Al cargar el estado legado inconsistente “ronda finalizada + mesa editada + sesión inactiva”, la
+  migración reactiva una sesión recuperable y construye un baseline desde los últimos resultados
+  guardados.
+- Tournament anteriores reciben `administrativeStandingParticipantIds` ausente. Los torneos
+  `prizeMode = "none"` migran con revisión financiera desactivada.
+- Un Fantasma legado en un Tournament `swiss` se conserva para reconstruir rondas históricas, pero
+  queda inactivo y no se autoriza para rondas futuras.
 
 ---
 
@@ -1399,14 +1448,20 @@ interface ChampionPhotoStorage {
 
 - La primera ronda usa el algoritmo aleatorio equilibrado.
 - Desde la segunda ronda toma el Standing del Tournament actual como única fuente de puntaje.
-- Prioriza evitar rematches; luego minimiza la dispersión de puntajes y posiciones dentro de cada
-  mesa. Los jugadores pueden subir o bajar de grupo cuando sea necesario para formar mesas de 3/4.
+- Ordena a los participantes activos estrictamente por el Standing competitivo y los distribuye de
+  forma secuencial en mesas válidas de 3/4: los mejor posicionados quedan juntos y luego continúa el
+  siguiente bloque.
+- No consulta historial de enfrentamientos ni intenta evitar rematches. Esa optimización pertenece
+  exclusivamente a `balanced_random`.
 - No usa resultados de otras fechas, puntos especiales de liga ni Leaderboard mensual.
+- No admite Jugador Fantasma.
 
 ### 28.3 Reglas comunes
 
 - Ambos modos excluyen participantes DROP de las rondas futuras.
-- El Jugador Fantasma no aporta puntaje ni historial competitivo; su ubicación prioriza rotar la
-  exposición entre jugadores reales y solo se usa con exactamente cinco jugadores reales activos.
+- El Jugador Fantasma no aporta puntaje ni historial competitivo y solo puede utilizarse en
+  `balanced_random`; su ubicación prioriza rotar la exposición entre jugadores reales.
 - Las mesas generadas siempre se pueden revisar e intercambiar manualmente antes de confirmarlas.
+- `Round.wasManuallyAdjusted` distingue una generación automática de una ronda cuyos asientos fueron
+  intercambiados manualmente.
 - El algoritmo vive en dominio, no en React, y nunca reescribe rondas ya creadas.

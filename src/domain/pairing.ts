@@ -1,4 +1,5 @@
 import { calculateTournamentStanding } from './leaderboard'
+import { DomainError } from './errors'
 import type { PairingMode, Participant, Tournament } from './tournament'
 
 export type PairingRandomSource = () => number
@@ -12,7 +13,7 @@ export const PAIRING_MODE_DESCRIPTIONS: Record<PairingMode, string> = {
   balanced_random:
     'Mezcla a los jugadores y busca la distribución con menos rivales repetidos.',
   swiss:
-    'Agrupa por Standing del evento, evita rematches y realiza los ajustes necesarios para formar mesas de 3 o 4.',
+    'Desde la Ronda 2 agrupa secuencialmente por el Standing competitivo, sin evitar rematches.',
 }
 
 interface PairingContext {
@@ -298,6 +299,24 @@ export function createPairingTables(
 ): Participant[][] {
   const context = buildPairingContext(tournament)
   const mode = tournament.pairingMode ?? 'balanced_random'
+  if (mode === 'swiss' && participants.some((participant) => participant.isGhost)) {
+    throw new DomainError('El Jugador Fantasma no está permitido en emparejamiento suizo.')
+  }
+  if (mode === 'swiss' && context.hasStandingData) {
+    const participantById = new Map(
+      participants.map((participant) => [participant.id, participant]),
+    )
+    const ordered = calculateTournamentStanding(tournament)
+      .flatMap((entry) => {
+        const participant = participantById.get(entry.participantId)
+        return participant ? [participant] : []
+      })
+    const orderedIds = new Set(ordered.map((participant) => participant.id))
+    ordered.push(
+      ...participants.filter((participant) => !orderedIds.has(participant.id)),
+    )
+    return partitionParticipants(ordered, tableSizes)
+  }
   const restartCount = participants.length <= 16 ? 20 : participants.length <= 28 ? 12 : 8
   let bestTables: Participant[][] | undefined
   let bestCost: number[] | undefined

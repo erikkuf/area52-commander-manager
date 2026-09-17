@@ -247,6 +247,40 @@ describe('edición segura de cantidad de rondas', () => {
     )).toThrow('No puedes reducir el torneo a 3 rondas porque la Ronda 4 ya contiene datos.')
     expect(tournament.rounds[0].tables[0].results[0].wonTable).toBe(true)
   })
+
+  it('reducir al número de rondas ya completadas deja el evento en rounds_completed', () => {
+    const withPlayers = importParticipants(
+      createTournament(input({ totalRounds: 3 }), ids('completed-base')),
+      'Ana\nBeto\nCarla',
+      ids('completed-player'),
+    ).tournament
+    const finishedRounds = [1, 2].map((roundNumber) => {
+      const round = createRound(withPlayers, roundNumber, () => 0.5, ids(`completed-${roundNumber}`))
+      return {
+        ...round,
+        status: 'finished' as const,
+        tables: round.tables.map((table) => ({
+          ...table,
+          status: 'saved' as const,
+          savedResults: table.results.map((result) => ({ ...result })),
+        })),
+      }
+    })
+    const active: Tournament = {
+      ...withPlayers,
+      status: 'active',
+      currentRound: 2,
+      rounds: finishedRounds,
+    }
+
+    const reduced = updateTournamentConfiguration(
+      active,
+      configFromTournament(active, { totalRounds: 2 }),
+    )
+    expect(reduced.status).toBe('rounds_completed')
+    expect(reduced.finishedAt).toBeUndefined()
+    expect(reduced.rounds).toHaveLength(2)
+  })
 })
 
 function finishedLeagueDate(leagueId: string, league = createDefaultLeaguePeriod(ids('fallback'))): Tournament {

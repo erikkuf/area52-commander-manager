@@ -5,7 +5,7 @@ import { buildPlayerRegistry } from '../domain/playerRegistry'
 import type { AppWorkspaceRepository } from './appWorkspaceRepository'
 
 export const APP_WORKSPACE_STORAGE_KEY = 'area52.commander-manager.workspace'
-export const APP_WORKSPACE_STORAGE_VERSION = 5
+export const APP_WORKSPACE_STORAGE_VERSION = 6
 
 interface StorageLike {
   getItem(key: string): string | null
@@ -55,7 +55,7 @@ export function deserializeAppWorkspace(serialized: string): AppWorkspace | null
       workspace?: Partial<AppWorkspace>
     }
     if (
-      ![1, 2, 3, 4, APP_WORKSPACE_STORAGE_VERSION].includes(snapshot.version ?? -1) ||
+      ![1, 2, 3, 4, 5, APP_WORKSPACE_STORAGE_VERSION].includes(snapshot.version ?? -1) ||
       !snapshot.workspace ||
       !Array.isArray(snapshot.workspace.tournaments)
     ) {

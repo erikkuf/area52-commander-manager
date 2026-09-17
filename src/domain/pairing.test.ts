@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { importParticipants, setParticipantActive } from './participants'
 import { createPairingTables, inspectPairing } from './pairing'
+import { calculateTournamentStanding } from './leaderboard'
 import { createRound, distributeTableSizes } from './tables'
 import type { IdFactory, Participant, Round, Tournament, TournamentConfigInput } from './tournament'
 import { createTournament } from './tournamentOperations'
@@ -105,7 +106,7 @@ describe('emparejamiento configurable', () => {
     ).toBe(0)
   })
 
-  it('el suizo agrupa puntajes cercanos sin sacrificar el mínimo de rematches', () => {
+  it('la R2 suiza sigue estrictamente el Standing aunque eso produzca rematches', () => {
     const tournament = tournamentWithPlayers(8, 'swiss')
     const first = createRound(tournament, 1, seededRandom(31), ids('round-1'))
     const scores = new Map<string, number>()
@@ -116,15 +117,59 @@ describe('emparejamiento configurable', () => {
     const committedFirst = commitScores(first, scores)
     const withHistory = { ...tournament, rounds: [committedFirst] }
     const second = createRound(withHistory, 2, seededRandom(32), ids('round-2'))
+    const expectedOrder = calculateTournamentStanding(withHistory).map(
+      (entry) => entry.participantId,
+    )
     const scoreGroups = second.tables
       .map((table) => table.participantIds.map((id) => scores.get(id)!).sort((a, b) => b - a))
       .sort((firstGroup, secondGroup) => secondGroup[0] - firstGroup[0])
 
     expect(scoreGroups).toEqual([[8, 7, 6, 5], [4, 3, 2, 1]])
+    expect(second.tables.flatMap((table) => table.participantIds)).toEqual(expectedOrder)
     expect(
       inspectPairing(withHistory, participantsForRound(withHistory, second)).repeatedPairs,
     ).toBe(4)
   })
+
+  it.each([3, 4, 5])(
+    'la R%s suiza mantiene el orden secuencial del Standing sin consultar el historial',
+    (targetRound) => {
+      const base = tournamentWithPlayers(8, 'swiss')
+      const first = createRound(base, 1, seededRandom(60), ids('swiss-history-1'))
+      const scores = new Map(
+        base.participants.map((participant, index) => [participant.id, 20 - index]),
+      )
+      let withHistory: Tournament = {
+        ...base,
+        rounds: [commitScores(first, scores)],
+      }
+
+      for (let roundNumber = 2; roundNumber < targetRound; roundNumber += 1) {
+        const round = createRound(
+          withHistory,
+          roundNumber,
+          seededRandom(60 + roundNumber),
+          ids(`swiss-history-${roundNumber}`),
+        )
+        withHistory = {
+          ...withHistory,
+          rounds: [...withHistory.rounds, commitScores(round, new Map())],
+        }
+      }
+
+      const expectedOrder = calculateTournamentStanding(withHistory).map(
+        (entry) => entry.participantId,
+      )
+      const next = createRound(
+        withHistory,
+        targetRound,
+        seededRandom(90 + targetRound),
+        ids(`swiss-target-${targetRound}`),
+      )
+
+      expect(next.tables.flatMap((table) => table.participantIds)).toEqual(expectedOrder)
+    },
+  )
 
   it('la primera ronda suiza sigue siendo una distribución aleatoria equilibrada válida', () => {
     const tournament = tournamentWithPlayers(10, 'swiss')

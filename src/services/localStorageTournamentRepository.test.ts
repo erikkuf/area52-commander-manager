@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { importParticipants } from '../domain/participants'
-import { beginTableCorrection, saveTableResults, updatePlayerResult } from '../domain/results'
+import {
+  beginTableCorrection,
+  discardRoundCorrection,
+  saveTableResults,
+  updatePlayerResult,
+} from '../domain/results'
 import { confirmRoundTables } from '../domain/tables'
 import { createTournament, startTournament } from '../domain/tournamentOperations'
 import {
@@ -72,6 +77,7 @@ describe('persistencia local', () => {
     legacyTournament.rounds.forEach((round: Record<string, unknown>) => {
       delete round.isCorrectionMode
       delete round.wasEditedAfterFinish
+      delete round.wasManuallyAdjusted
     })
     legacyTournament.rounds[0].tables.forEach((table: Record<string, unknown>) => {
       delete table.savedResults
@@ -92,10 +98,53 @@ describe('persistencia local', () => {
     expect(restored?.dateCreditConfig).toEqual(tournament.dateCreditConfig)
     expect(restored?.achievementConfig.win.points).toBe(3)
     expect(restored?.participants.every((participant) => participant.isGhost === false)).toBe(true)
-    expect(restored?.rounds[0]).toMatchObject({ isCorrectionMode: false, wasEditedAfterFinish: false })
+    expect(restored?.rounds[0]).toMatchObject({
+      isCorrectionMode: false,
+      wasEditedAfterFinish: false,
+      wasManuallyAdjusted: false,
+    })
     expect(restored).toMatchObject({ ghostPairingAuthorized: false, financialReviewRequired: false })
     expect(restored?.pairingMode).toBe('balanced_random')
-    expect(TOURNAMENT_STORAGE_VERSION).toBe(8)
+    expect(TOURNAMENT_STORAGE_VERSION).toBe(9)
+  })
+
+  it('recupera como sesión activa una corrección antigua interrumpida', () => {
+    const active = confirmRoundTables(tournament, tournament.rounds[0].id)
+    const allSaved = active.rounds[0].tables.reduce(
+      (current, table) => saveTableResults(current, active.rounds[0].id, table.id),
+      active,
+    )
+    const legacy = JSON.parse(JSON.stringify(allSaved))
+    legacy.rounds[0].status = 'finished'
+    legacy.rounds[0].isCorrectionMode = false
+    legacy.rounds[0].tables[0].status = 'edited'
+    delete legacy.rounds[0].correctionBaseline
+
+    const restored = deserializeTournament(JSON.stringify({ version: 8, tournament: legacy }))!
+    expect(restored.rounds[0].isCorrectionMode).toBe(true)
+    expect(restored.rounds[0].correctionBaseline).toBeDefined()
+    const discarded = discardRoundCorrection(restored, restored.rounds[0].id)
+    expect(discarded.rounds[0].isCorrectionMode).toBe(false)
+    expect(discarded.rounds[0].tables.every((table) => table.status === 'saved')).toBe(true)
+  })
+
+  it('conserva un Ghost legado de Swiss solo como historia inactiva', () => {
+    const legacy = JSON.parse(JSON.stringify(tournament))
+    legacy.pairingMode = 'swiss'
+    legacy.ghostPairingAuthorized = true
+    legacy.participants.push({
+      id: 'ghost-legacy',
+      playerKey: 'ghost:legacy',
+      name: 'Jugador Fantasma',
+      active: true,
+      isGhost: true,
+    })
+    const restored = deserializeTournament(JSON.stringify({ version: 8, tournament: legacy }))!
+    expect(restored.participants.find((participant) => participant.id === 'ghost-legacy')).toMatchObject({
+      active: false,
+      isGhost: true,
+    })
+    expect(restored.ghostPairingAuthorized).toBe(false)
   })
 
   it('rechaza snapshots inválidos sin romper la aplicación', () => {

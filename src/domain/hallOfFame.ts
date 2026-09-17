@@ -48,7 +48,7 @@ function haveEqualChampionTieBreakers(
 ): boolean {
   return first.leaguePoints === second.leaguePoints &&
     first.tableWins === second.tableWins &&
-    first.achievementPoints === second.achievementPoints &&
+    first.achievementCount === second.achievementCount &&
     first.eliminations === second.eliminations
 }
 

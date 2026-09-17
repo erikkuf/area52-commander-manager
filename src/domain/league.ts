@@ -28,6 +28,7 @@ export interface LeagueLeaderboardEntry {
   position: number
   leaguePoints: number
   achievementPoints: number
+  achievementCount: number
   specialLeaguePoints: number
   participations: number
   dateCreditEarned: number
@@ -54,6 +55,7 @@ interface LeagueStandingAccumulator {
   playerName: string
   leaguePoints: number
   achievementPoints: number
+  achievementCount: number
   specialLeaguePoints: number
   participations: number
   dateCreditEarned: number
@@ -111,10 +113,19 @@ export function haveEqualLeagueTieBreakers(
   first: LeagueLeaderboardEntry,
   second: LeagueLeaderboardEntry,
 ): boolean {
-  return first.leaguePoints === second.leaguePoints &&
-    first.tableWins === second.tableWins &&
-    first.achievementPoints === second.achievementPoints &&
-    first.eliminations === second.eliminations
+  return compareLeagueLeaderboardMetrics(first, second) === 0
+}
+
+export function compareLeagueLeaderboardMetrics(
+  first: Pick<LeagueLeaderboardEntry, 'leaguePoints' | 'tableWins' | 'achievementCount' | 'eliminations'>,
+  second: Pick<LeagueLeaderboardEntry, 'leaguePoints' | 'tableWins' | 'achievementCount' | 'eliminations'>,
+): number {
+  return (
+    second.leaguePoints - first.leaguePoints ||
+    second.tableWins - first.tableWins ||
+    second.achievementCount - first.achievementCount ||
+    second.eliminations - first.eliminations
+  )
 }
 
 export function findExactLeagueTieGroups(
@@ -172,6 +183,7 @@ function buildLeagueLeaderboardInternal(
         playerName: participant.name,
         leaguePoints: 0,
         achievementPoints: 0,
+        achievementCount: 0,
         specialLeaguePoints: 0,
         participations: 0,
         dateCreditEarned: 0,
@@ -182,6 +194,7 @@ function buildLeagueLeaderboardInternal(
       current.playerName = participant.name
       current.leaguePoints += entry.totalPoints
       current.achievementPoints += entry.achievementPoints
+      current.achievementCount += entry.achievementCount
       current.participations += entry.savedTables > 0 ? 1 : 0
       current.tableWins += entry.tableWins
       current.eliminations += entry.eliminations
@@ -213,10 +226,7 @@ function buildLeagueLeaderboardInternal(
         ? officialOrderIndex(leaguePeriod, first.playerKey) -
           officialOrderIndex(leaguePeriod, second.playerKey)
         : 0) ||
-      second.leaguePoints - first.leaguePoints ||
-      second.tableWins - first.tableWins ||
-      second.achievementPoints - first.achievementPoints ||
-      second.eliminations - first.eliminations ||
+      compareLeagueLeaderboardMetrics(first, second) ||
       administrativeOrderIndex(leaguePeriod, first.playerKey) -
         administrativeOrderIndex(leaguePeriod, second.playerKey) ||
       first.playerName.localeCompare(second.playerName, 'es-CL') ||

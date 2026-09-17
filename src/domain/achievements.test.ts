@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  calculateAchievementCount,
   calculateAchievementPoints,
   cloneAchievementConfig,
   DEFAULT_ACHIEVEMENT_CONFIG,
@@ -20,15 +21,32 @@ describe('calculateAchievementPoints configurable', () => {
     expect(calculateAchievementPoints(recordedFacts)).toBe(7)
   })
 
-  it('calcula todos los logros activos y cada eliminación', () => {
-    expect(calculateAchievementPoints({
+  it('cuenta solamente los logros rotativos habilitados', () => {
+    const result = {
       rotating1: true,
       rotating2: true,
       rotating3: true,
       wonTable: true,
       eliminations: 3,
       survived: true,
-    })).toBe(10)
+    }
+    expect(calculateAchievementPoints(result)).toBe(10)
+    expect(calculateAchievementCount(result)).toBe(3)
+  })
+
+  it('ignora victoria, eliminaciones y supervivencia sin depender de sus puntos', () => {
+    const config = cloneAchievementConfig(DEFAULT_ACHIEVEMENT_CONFIG)
+    config.win.points = 20
+    config.rotating1.points = 0
+    expect(calculateAchievementCount(recordedFacts, config)).toBe(1)
+    expect(calculateAchievementPoints(recordedFacts, config)).toBe(23)
+  })
+
+  it('no cuenta un rotativo registrado cuando está deshabilitado', () => {
+    const config = cloneAchievementConfig(DEFAULT_ACHIEVEMENT_CONFIG)
+    config.rotating1.enabled = false
+    expect(calculateAchievementCount(recordedFacts, config)).toBe(0)
+    expect(recordedFacts.rotating1).toBe(true)
   })
 
   it('cambiar win de 3 a 5 recalcula sin cambiar los hechos', () => {

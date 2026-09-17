@@ -4,10 +4,12 @@ import { importParticipants, setParticipantActive } from './participants'
 import {
   beginRoundCorrection,
   beginTableCorrection,
+  discardRoundCorrection,
   saveTableResults,
   updatePlayerResult,
   validateTableResults,
 } from './results'
+import { finalizeRoundCorrectionSession, previewRoundCorrection } from './competitive'
 import { finishRound, generateNextRound, isRoundComplete } from './rounds'
 import { confirmRoundTables } from './tables'
 import { createTournament, startTournament } from './tournamentOperations'
@@ -176,9 +178,72 @@ describe('resultados y estado de mesa', () => {
 
     expect(reopened.rounds[0].status).toBe('finished')
     expect(reopened.rounds[0].isCorrectionMode).toBe(true)
-    expect(reopened.rounds[0].wasEditedAfterFinish).toBe(true)
+    expect(reopened.rounds[0].wasEditedAfterFinish).toBe(false)
     expect(reopened.rounds[0].tables[0].status).toBe('edited')
     expect(isRoundComplete(reopened, round.id)).toBe(false)
+  })
+
+  it('mantiene una sesión de ronda abierta mientras se corrigen varias mesas', () => {
+    const tournament = activeTournament()
+    const round = tournament.rounds[0]
+    const finished = finishRound(saveEveryTable(tournament), round.id)
+    let correcting = beginRoundCorrection(finished, round.id)
+    const [firstTable, secondTable] = correcting.rounds[0].tables
+    correcting = beginTableCorrection(correcting, round.id, firstTable.id)
+    correcting = beginTableCorrection(correcting, round.id, secondTable.id)
+    correcting = updatePlayerResult(
+      correcting,
+      round.id,
+      firstTable.id,
+      firstTable.participantIds[0],
+      { rotating1: true },
+    )
+    correcting = updatePlayerResult(
+      correcting,
+      round.id,
+      secondTable.id,
+      secondTable.participantIds[0],
+      { rotating2: true },
+    )
+
+    const firstSaved = saveTableResults(correcting, round.id, firstTable.id)
+    expect(firstSaved.rounds[0]).toMatchObject({ isCorrectionMode: true, status: 'finished' })
+    expect(firstSaved.rounds[0].tables.find((table) => table.id === secondTable.id)?.status).toBe('edited')
+
+    const bothSaved = saveTableResults(firstSaved, round.id, secondTable.id)
+    const preview = previewRoundCorrection(bothSaved, round.id)
+    expect(preview.changed).toBe(true)
+    const completed = finalizeRoundCorrectionSession(bothSaved, round.id)
+    expect(completed.rounds[0]).toMatchObject({
+      isCorrectionMode: false,
+      status: 'finished',
+      wasEditedAfterFinish: true,
+    })
+    expect(completed.rounds[0].tables.every((table) => table.status === 'saved')).toBe(true)
+  })
+
+  it('descarta una sesión completa y restaura los resultados previos', () => {
+    const tournament = activeTournament()
+    const round = tournament.rounds[0]
+    const finished = finishRound(saveEveryTable(tournament), round.id)
+    const table = finished.rounds[0].tables[0]
+    let correcting = beginTableCorrection(
+      beginRoundCorrection(finished, round.id),
+      round.id,
+      table.id,
+    )
+    correcting = updatePlayerResult(
+      correcting,
+      round.id,
+      table.id,
+      table.participantIds[0],
+      { rotating1: true },
+    )
+    correcting = saveTableResults(correcting, round.id, table.id)
+
+    const discarded = discardRoundCorrection(correcting, round.id)
+    expect(discarded.rounds[0].isCorrectionMode).toBe(false)
+    expect(discarded.rounds[0].tables).toEqual(finished.rounds[0].tables)
   })
 })
 

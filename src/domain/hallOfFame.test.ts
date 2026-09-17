@@ -116,6 +116,7 @@ function fakeEntry(
     position: 1,
     leaguePoints: 10,
     achievementPoints: 10,
+    achievementCount: 4,
     specialLeaguePoints: 0,
     participations: 1,
     dateCreditEarned: 0,

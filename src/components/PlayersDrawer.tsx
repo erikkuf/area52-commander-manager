@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import type { Participant, Round, TournamentStatus } from '../domain/tournament'
+import type { PairingMode, Participant, Round, TournamentStatus } from '../domain/tournament'
 import type { ParticipantImportReport } from '../domain/participants'
 import { CloseIcon, UsersIcon } from './icons'
 import { formatCurrency } from '../utils/format'
@@ -31,6 +31,10 @@ interface PlayersDrawerProps {
   onRenamePlayer: (participantId: string, name: string) => void
   onRemovePlayer: (participantId: string) => void
   onToggleActive: (participantId: string, active: boolean) => void
+  pairingMode: PairingMode
+  ghostEnabled: boolean
+  onEnableGhost: () => void
+  onDisableGhost: () => void
   onConfirmLateRegistration: () => void
   onSkipLateRegistration: () => void
   onClose: () => void
@@ -49,6 +53,10 @@ export function PlayersDrawer({
   onRenamePlayer,
   onRemovePlayer,
   onToggleActive,
+  pairingMode,
+  ghostEnabled,
+  onEnableGhost,
+  onDisableGhost,
   onConfirmLateRegistration,
   onSkipLateRegistration,
   onClose,
@@ -123,6 +131,30 @@ export function PlayersDrawer({
             <div><span>Pozo fecha</span><strong>{formatCurrency.format(prizeSummary.datePrizePool)}</strong></div>
             <div><span>Aporte mensual</span><strong>{formatCurrency.format(prizeSummary.monthlyPoolContribution)}</strong></div>
             <div><span>Total</span><strong>{formatCurrency.format(prizeSummary.totalGenerated)}</strong></div>
+          </div>
+        )}
+
+        {tournamentStatus !== 'finished' && (
+          <div className="ghost-management">
+            <div>
+              <strong>Jugador Fantasma</strong>
+              <span>
+                {pairingMode === 'swiss'
+                  ? 'No está disponible con emparejamiento suizo.'
+                  : ghostEnabled
+                    ? 'Activo para las próximas rondas; ocupa asiento y no compite.'
+                    : 'Opcional en Aleatorio equilibrado. Máximo uno por torneo.'}
+              </span>
+            </div>
+            {pairingMode === 'balanced_random' && (
+              <button
+                className={ghostEnabled ? 'danger-text-button' : 'secondary-button'}
+                type="button"
+                onClick={ghostEnabled ? onDisableGhost : onEnableGhost}
+              >
+                {ghostEnabled ? 'Quitar Fantasma' : 'Agregar Fantasma'}
+              </button>
+            )}
           </div>
         )}
 

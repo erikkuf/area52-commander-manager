@@ -190,21 +190,31 @@ export function saveTableResults(
   }))
   const savedAt = new Date().toISOString()
 
-  return replaceTable(
-    tournament,
-    roundId,
-    tableId,
-    (currentTable) => ({
+  return replaceTable(tournament, roundId, tableId, (currentTable) => ({
       ...currentTable,
       status: 'saved',
       results: calculatedResults,
       savedResults: calculatedResults.map((result) => ({ ...result })),
       lastSavedAt: savedAt,
-    }),
-    (currentRound) =>
-      currentRound.status === 'finished'
-        ? { ...currentRound, isCorrectionMode: false, lastEditedAt: savedAt }
-        : currentRound,
+    }))
+}
+
+function cloneTable(table: CommanderTable): CommanderTable {
+  return {
+    ...table,
+    participantIds: [...table.participantIds],
+    results: table.results.map((result) => ({ ...result })),
+    savedResults: table.savedResults.map((result) => ({ ...result })),
+  }
+}
+
+function comparableResults(tables: CommanderTable[]): string {
+  return JSON.stringify(
+    tables.map((table) => ({
+      id: table.id,
+      participantIds: table.participantIds,
+      results: table.savedResults,
+    })),
   )
 }
 
@@ -218,6 +228,15 @@ export function beginRoundCorrection(
   if (round.status !== 'finished') {
     throw new DomainError('Solo las rondas finalizadas requieren el modo de corrección administrativa.')
   }
+  if (round.isCorrectionMode) return tournament
+  const otherCorrection = tournament.rounds.find(
+    (item) => item.id !== roundId && item.isCorrectionMode,
+  )
+  if (otherCorrection) {
+    throw new DomainError(
+      `Finaliza o descarta primero la corrección de la Ronda ${otherCorrection.number}.`,
+    )
+  }
   return {
     ...tournament,
     rounds: tournament.rounds.map((item) =>
@@ -225,8 +244,90 @@ export function beginRoundCorrection(
         ? {
             ...item,
             isCorrectionMode: true,
-            wasEditedAfterFinish: true,
-            lastEditedAt: now,
+            correctionBaseline: item.tables.map(cloneTable),
+            correctionStartedAt: now,
+          }
+        : item,
+    ),
+    updatedAt: now,
+  }
+}
+
+export function buildTournamentBeforeRoundCorrection(
+  tournament: Tournament,
+  roundId: string,
+): Tournament {
+  const round = tournament.rounds.find((item) => item.id === roundId)
+  if (!round?.isCorrectionMode || !round.correctionBaseline) {
+    throw new DomainError('No existe una sesión de corrección activa para esta ronda.')
+  }
+  return {
+    ...tournament,
+    rounds: tournament.rounds.map((item) =>
+      item.id === roundId
+        ? { ...item, tables: item.correctionBaseline!.map(cloneTable) }
+        : item,
+    ),
+  }
+}
+
+export function roundCorrectionHasChanges(round: Round): boolean {
+  return Boolean(
+    round.correctionBaseline &&
+      comparableResults(round.correctionBaseline) !== comparableResults(round.tables),
+  )
+}
+
+export function closeRoundCorrection(
+  tournament: Tournament,
+  roundId: string,
+  now = new Date().toISOString(),
+): Tournament {
+  const round = tournament.rounds.find((item) => item.id === roundId)
+  if (!round?.isCorrectionMode || !round.correctionBaseline) {
+    throw new DomainError('No existe una sesión de corrección activa para esta ronda.')
+  }
+  if (round.tables.some((table) => table.status !== 'saved')) {
+    throw new DomainError('Guarda todas las mesas editadas antes de finalizar la corrección.')
+  }
+  const changed = roundCorrectionHasChanges(round)
+  return {
+    ...tournament,
+    rounds: tournament.rounds.map((item) =>
+      item.id === roundId
+        ? {
+            ...item,
+            isCorrectionMode: false,
+            correctionBaseline: undefined,
+            correctionStartedAt: undefined,
+            wasEditedAfterFinish: item.wasEditedAfterFinish || changed,
+            lastEditedAt: changed ? now : item.lastEditedAt,
+          }
+        : item,
+    ),
+    updatedAt: now,
+  }
+}
+
+export function discardRoundCorrection(
+  tournament: Tournament,
+  roundId: string,
+  now = new Date().toISOString(),
+): Tournament {
+  const round = tournament.rounds.find((item) => item.id === roundId)
+  if (!round?.isCorrectionMode || !round.correctionBaseline) {
+    throw new DomainError('No existe una sesión de corrección activa para esta ronda.')
+  }
+  return {
+    ...tournament,
+    rounds: tournament.rounds.map((item) =>
+      item.id === roundId
+        ? {
+            ...item,
+            tables: item.correctionBaseline!.map(cloneTable),
+            isCorrectionMode: false,
+            correctionBaseline: undefined,
+            correctionStartedAt: undefined,
           }
         : item,
     ),

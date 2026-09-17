@@ -3136,6 +3136,30 @@ input:focus-visible {
   padding: 9px 11px;
 }
 
+.ghost-management {
+  margin: 12px 0;
+  padding: 13px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #0e1722;
+}
+
+.ghost-management div,
+.ghost-management span {
+  display: block;
+}
+
+.ghost-management span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
 .late-registration-warning {
   margin: 12px 0;
   padding: 15px;
@@ -3344,6 +3368,27 @@ input:focus-visible {
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
+}
+
+.tie-break-panel > strong,
+.tie-break-panel > span {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.tie-break-panel > span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.tie-break-panel > div {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
 }
 
 .credit-import-row span,
