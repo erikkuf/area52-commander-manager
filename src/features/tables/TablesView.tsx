@@ -269,10 +269,11 @@ export function TablesView({
           </p>
         </div>
         <div className="achievement-legend" aria-label="Leyenda de logros rotativos">
-          {tournament.rotatingAchievements.filter((achievement) => tournament.achievementConfig[achievement.id]?.enabled).map((achievement) => (
-            <span key={achievement.id} title={achievement.label}>
-              <b>R{achievement.id.slice(-1)}</b> {achievement.label}
-            </span>
+          {tournament.rotatingAchievements.filter((achievement) => achievement.enabled).map((achievement, index) => (
+            <details key={achievement.id} className="achievement-legend-item">
+              <summary><b>R{index + 1}</b> {achievement.name} · {achievement.points > 0 ? '+' : ''}{achievement.points}</summary>
+              <p>{achievement.description || 'Sin descripción.'}</p>
+            </details>
           ))}
         </div>
       </div>

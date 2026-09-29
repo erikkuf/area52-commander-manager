@@ -44,6 +44,17 @@ describe('persistencia local', () => {
     expect(deserializeTournament(serializeTournament(tournament))).toEqual(tournament)
   })
 
+  it('conserva el valor del snapshot dinámico aunque la regla legacy tenga otro valor', () => {
+    const dynamic = {
+      ...tournament,
+      rotatingAchievements: tournament.rotatingAchievements.map((snapshot, index) =>
+        index === 0 ? { ...snapshot, points: -2 } : snapshot,
+      ),
+    }
+    expect(deserializeTournament(serializeTournament(dynamic))?.rotatingAchievements[0].points)
+      .toBe(-2)
+  })
+
   it('recupera ronda, resultados guardados y estado de corrección', () => {
     const active = confirmRoundTables(tournament, tournament.rounds[0].id)
     const table = active.rounds[0].tables[0]
@@ -71,6 +82,7 @@ describe('persistencia local', () => {
     delete legacyTournament.ghostPairingAuthorized
     delete legacyTournament.financialReviewRequired
     delete legacyTournament.pairingMode
+    delete legacyTournament.penaltyMovements
     legacyTournament.participants.forEach((participant: Record<string, unknown>) => {
       delete participant.isGhost
     })
@@ -105,7 +117,53 @@ describe('persistencia local', () => {
     })
     expect(restored).toMatchObject({ ghostPairingAuthorized: false, financialReviewRequired: false })
     expect(restored?.pairingMode).toBe('balanced_random')
-    expect(TOURNAMENT_STORAGE_VERSION).toBe(9)
+    expect(restored?.penaltyMovements).toEqual([])
+    expect(TOURNAMENT_STORAGE_VERSION).toBe(11)
+  })
+
+  it('migra versión 10 sin penalizaciones y conserva movimientos en versión actual', () => {
+    const previous = { ...tournament, penaltyMovements: undefined }
+    const restored = deserializeTournament(JSON.stringify({ version: 10, tournament: previous }))
+    expect(restored?.penaltyMovements).toEqual([])
+    const withMovement = {
+      ...tournament,
+      penaltyMovements: [{
+        id: 'penalty-1', tournamentId: tournament.id,
+        playerKey: tournament.participants[0].playerKey,
+        name: 'Falta', amount: -2, createdAt: '2026-09-22T12:00:00.000Z',
+        status: 'active' as const,
+      }],
+    }
+    expect(deserializeTournament(serializeTournament(withMovement))?.penaltyMovements)
+      .toEqual(withMovement.penaltyMovements)
+    expect(deserializeTournament(serializeTournament({
+      ...withMovement,
+      penaltyMovements: [{ ...withMovement.penaltyMovements[0], amount: 2 }],
+    }))).toBeNull()
+  })
+
+  it('migra rotating1–rotating5 a IDs dinámicos sin recalcular un histórico finalizado', () => {
+    const legacy = JSON.parse(JSON.stringify(tournament))
+    legacy.status = 'finished'
+    legacy.rotatingAchievements = [1, 2, 3, 4, 5].map((slot) => ({
+      id: `rotating${slot}`,
+      label: `Logro ${slot}`,
+      points: slot === 5 ? -1 : slot,
+    }))
+    legacy.achievementConfig.rotating4 = { enabled: true, points: 4 }
+    legacy.achievementConfig.rotating5 = { enabled: true, points: -1 }
+    const historicalResult = legacy.rounds[0].tables[0].results[0]
+    historicalResult.rotating1 = true
+    historicalResult.rotating4 = true
+    historicalResult.rotating5 = true
+    historicalResult.achievementPoints = 99
+    delete historicalResult.rotatingAchievementIds
+
+    const restored = deserializeTournament(JSON.stringify({ version: 9, tournament: legacy }))!
+    expect(restored.rotatingAchievements).toHaveLength(5)
+    expect(restored.rounds[0].tables[0].results[0].rotatingAchievementIds)
+      .toEqual(['rotating1', 'rotating4', 'rotating5'])
+    expect(restored.rounds[0].tables[0].results[0].achievementPoints).toBe(99)
   })
 
   it('recupera como sesión activa una corrección antigua interrumpida', () => {

@@ -2,7 +2,7 @@ import type {
   AchievementConfig,
   Participant,
   PlayerResult,
-  RotatingAchievementConfig,
+  TournamentRotatingAchievementSnapshot,
 } from '../domain/tournament'
 import type { PlayerResultChanges } from '../domain/results'
 
@@ -10,7 +10,7 @@ interface PlayerResultRowProps {
   player: Participant
   result?: PlayerResult
   achievementConfig: AchievementConfig
-  rotatingAchievements: RotatingAchievementConfig[]
+  rotatingAchievements: TournamentRotatingAchievementSnapshot[]
   pairingMode?: boolean
   disabled?: boolean
   winDisabled?: boolean
@@ -104,17 +104,26 @@ export function PlayerResultRow({
 
       <div className="score-controls" aria-label={`Resultados de ${player.name}`}>
         {rotatingAchievements.map((achievement, index) => {
-          const rule = achievementConfig[achievement.id]
-          if (!rule?.enabled) return null
-          const active = Boolean(result[achievement.id])
-          return <ToggleChip
-            key={achievement.id}
-            label={`R${index + 1}`}
-            active={active}
-            accessibleLabel={`${player.name}: ${achievement.label}`}
-            disabled={controlsDisabled}
-            onToggle={() => onChange?.({ [achievement.id]: !active })}
-          />
+          if (!achievement.enabled) return null
+          const obtainedIds = result.rotatingAchievementIds ?? []
+          const active = obtainedIds.includes(achievement.id)
+          return <div className="dynamic-achievement-control" key={achievement.id}>
+            <ToggleChip
+              label={`R${index + 1}`}
+              active={active}
+              accessibleLabel={`${player.name}: ${achievement.name}, ${achievement.points > 0 ? '+' : ''}${achievement.points} puntos`}
+              disabled={controlsDisabled}
+              onToggle={() => onChange?.({
+                rotatingAchievementIds: active
+                  ? obtainedIds.filter((id) => id !== achievement.id)
+                  : [...obtainedIds, achievement.id],
+              })}
+            />
+            <details className="score-toggle-info">
+              <summary aria-label={`Descripción de ${achievement.name}`}>?</summary>
+              <div><strong>{achievement.name}</strong><p>{achievement.description || 'Sin descripción.'}</p><span>{achievement.points > 0 ? '+' : ''}{achievement.points} pts.</span></div>
+            </details>
+          </div>
         })}
         {achievementConfig.win.enabled && <ToggleChip
           label="G"

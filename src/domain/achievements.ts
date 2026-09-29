@@ -2,11 +2,16 @@ import { DomainError } from './errors'
 import type {
   AchievementConfig,
   AchievementRule,
+  LegacyRotatingAchievementConfig,
   PlayerResult,
   RotatingAchievementId,
-  RotatingAchievementConfig,
   Tournament,
+  TournamentRotatingAchievementSnapshot,
 } from './tournament'
+import {
+  DEFAULT_ROTATING_ACHIEVEMENT_CATALOG,
+  snapshotRotatingAchievement,
+} from './achievementCatalogs'
 
 export const ROTATING_ACHIEVEMENT_IDS: RotatingAchievementId[] = [
   'rotating1',
@@ -16,11 +21,11 @@ export const ROTATING_ACHIEVEMENT_IDS: RotatingAchievementId[] = [
   'rotating5',
 ]
 export const MAX_ROTATING_ACHIEVEMENTS = ROTATING_ACHIEVEMENT_IDS.length
-export const DEFAULT_ROTATING_ACHIEVEMENTS: RotatingAchievementConfig[] = [
-  { id: 'rotating1', label: 'Primera sangre', points: 1 },
-  { id: 'rotating2', label: 'Comandante al ataque', points: 1 },
-  { id: 'rotating3', label: 'Pacto inesperado', points: 1 },
-]
+export const DEFAULT_ROTATING_ACHIEVEMENTS: TournamentRotatingAchievementSnapshot[] =
+  DEFAULT_ROTATING_ACHIEVEMENT_CATALOG.map((definition, index) => ({
+    ...snapshotRotatingAchievement(definition),
+    legacySlot: ROTATING_ACHIEVEMENT_IDS[index],
+  }))
 
 const enabledRule = (points: number): AchievementRule => ({ enabled: true, points })
 
@@ -55,9 +60,7 @@ export function cloneAchievementConfig(config: AchievementConfig): AchievementCo
 }
 
 export function validateAchievementConfig(config: AchievementConfig): void {
-  const rules = Object.values(config).filter(
-    (rule): rule is AchievementRule => Boolean(rule),
-  )
+  const rules: AchievementRule[] = [config.win, config.elimination, config.survival]
   if (rules.some((rule) => !Number.isFinite(rule.points) || rule.points < 0)) {
     throw new DomainError('Los valores de logros deben ser números mayores o iguales a 0.')
   }
@@ -65,6 +68,7 @@ export function validateAchievementConfig(config: AchievementConfig): void {
 
 type AchievementResult = Pick<
   PlayerResult,
+  | 'rotatingAchievementIds'
   | 'rotating1'
   | 'rotating2'
   | 'rotating3'
@@ -75,15 +79,93 @@ type AchievementResult = Pick<
   | 'survived'
 >
 
+export function rotatingAchievementName(
+  snapshot: TournamentRotatingAchievementSnapshot,
+): string {
+  return snapshot.name
+}
+
+function legacySlotValue(result: AchievementResult, slot: RotatingAchievementId): boolean {
+  return Boolean(result[slot])
+}
+
+export function getObtainedRotatingAchievementIds(
+  result: AchievementResult,
+  snapshots: TournamentRotatingAchievementSnapshot[],
+): string[] {
+  const obtained = new Set(result.rotatingAchievementIds ?? [])
+  snapshots.forEach((snapshot, index) => {
+    const legacySlot = snapshot.legacySlot ?? (
+      ROTATING_ACHIEVEMENT_IDS.includes(snapshot.id as RotatingAchievementId)
+        ? snapshot.id as RotatingAchievementId
+        : ROTATING_ACHIEVEMENT_IDS[index]
+    )
+    if (legacySlot && legacySlotValue(result, legacySlot)) obtained.add(snapshot.id)
+  })
+  return [...obtained]
+}
+
+export function normalizeRotatingAchievementSnapshots(
+  achievements: Array<TournamentRotatingAchievementSnapshot | LegacyRotatingAchievementConfig> | undefined,
+  config: AchievementConfig,
+): TournamentRotatingAchievementSnapshot[] {
+  const source = achievements?.length ? achievements : DEFAULT_ROTATING_ACHIEVEMENTS
+  const seen = new Set<string>()
+  return source.flatMap((achievement, index) => {
+    const legacy = 'label' in achievement
+    const legacySlot = legacy
+      ? achievement.id
+      : achievement.legacySlot ?? (
+          ROTATING_ACHIEVEMENT_IDS.includes(achievement.id as RotatingAchievementId)
+            ? achievement.id as RotatingAchievementId
+            : undefined
+        )
+    const id = achievement.id || `legacy-rotating-${index + 1}`
+    if (seen.has(id)) return []
+    seen.add(id)
+    const legacyRule = legacy && legacySlot ? config[legacySlot] : undefined
+    return [{
+      id,
+      sourceDefinitionId: legacy ? undefined : achievement.sourceDefinitionId,
+      name: legacy ? achievement.label.trim() : achievement.name.trim(),
+      description: legacy ? '' : achievement.description ?? '',
+      points: legacyRule?.points ?? achievement.points,
+      enabled: legacyRule?.enabled ?? (legacy ? true : achievement.enabled),
+      ...(legacySlot ? { legacySlot } : {}),
+    }]
+  })
+}
+
+export function migratePlayerResultRotatingAchievements(
+  result: PlayerResult,
+  snapshots: TournamentRotatingAchievementSnapshot[],
+): PlayerResult {
+  return {
+    ...result,
+    rotatingAchievementIds: getObtainedRotatingAchievementIds(result, snapshots),
+    rotating1: result.rotating1 ?? false,
+    rotating2: result.rotating2 ?? false,
+    rotating3: result.rotating3 ?? false,
+    rotating4: result.rotating4 ?? false,
+    rotating5: result.rotating5 ?? false,
+  }
+}
+
 export function calculateAchievementPoints(
   result: AchievementResult,
   config: AchievementConfig = DEFAULT_ACHIEVEMENT_CONFIG,
+  snapshots?: TournamentRotatingAchievementSnapshot[],
 ): number {
   validateAchievementConfig(config)
-  const rotatingPoints = ROTATING_ACHIEVEMENT_IDS.reduce((total, id) => {
-    const rule = config[id]
-    return total + (result[id] && rule?.enabled ? rule.points : 0)
-  }, 0)
+  const rotatingPoints = snapshots
+    ? getObtainedRotatingAchievementIds(result, snapshots).reduce((total, id) => {
+        const snapshot = snapshots.find((item) => item.id === id)
+        return total + (snapshot?.enabled ? snapshot.points : 0)
+      }, 0)
+    : ROTATING_ACHIEVEMENT_IDS.reduce((total, id) => {
+        const rule = config[id]
+        return total + (result[id] && rule?.enabled ? rule.points : 0)
+      }, 0)
   return (
     rotatingPoints +
     (result.wonTable && config.win.enabled ? config.win.points : 0) +
@@ -100,11 +182,18 @@ export function calculateAchievementPoints(
 export function calculateAchievementCount(
   result: AchievementResult,
   config: AchievementConfig = DEFAULT_ACHIEVEMENT_CONFIG,
+  snapshots?: TournamentRotatingAchievementSnapshot[],
 ): number {
   validateAchievementConfig(config)
+  if (snapshots) {
+    const obtained = new Set(getObtainedRotatingAchievementIds(result, snapshots))
+    return snapshots.filter(
+      (snapshot) => snapshot.enabled && snapshot.points > 0 && obtained.has(snapshot.id),
+    ).length
+  }
   return ROTATING_ACHIEVEMENT_IDS.reduce((total, id) => {
     const rule = config[id]
-    return total + (result[id] && rule?.enabled ? 1 : 0)
+    return total + (result[id] && rule?.enabled && rule.points > 0 ? 1 : 0)
   }, 0)
 }
 
@@ -121,8 +210,16 @@ export function achievementConfigsEqual(
   return JSON.stringify(first) === JSON.stringify(second)
 }
 
+export function rotatingAchievementSnapshotsEqual(
+  first: TournamentRotatingAchievementSnapshot[],
+  second: TournamentRotatingAchievementSnapshot[],
+): boolean {
+  return JSON.stringify(first) === JSON.stringify(second)
+}
+
 function resultContainsFacts(result: PlayerResult): boolean {
   return (
+    Boolean(result.rotatingAchievementIds?.length) ||
     result.rotating1 ||
     result.rotating2 ||
     result.rotating3 ||
@@ -153,7 +250,11 @@ export function recalculateTournamentAchievementPoints(
   validateAchievementConfig(achievementConfig)
   const recalculate = (result: PlayerResult): PlayerResult => ({
     ...result,
-    achievementPoints: calculateAchievementPoints(result, achievementConfig),
+    achievementPoints: calculateAchievementPoints(
+      result,
+      achievementConfig,
+      tournament.rotatingAchievements,
+    ),
   })
 
   return {

@@ -1,6 +1,7 @@
 import {
   achievementPointConfigFromTournament,
   calculateAchievementPoints,
+  migratePlayerResultRotatingAchievements,
 } from './achievements'
 import { DomainError } from './errors'
 import type { CommanderTable, Participant, PlayerResult, Round, Tournament } from './tournament'
@@ -8,6 +9,7 @@ import type { CommanderTable, Participant, PlayerResult, Round, Tournament } fro
 export type PlayerResultChanges = Partial<
   Pick<
     PlayerResult,
+    | 'rotatingAchievementIds'
     | 'rotating1'
     | 'rotating2'
     | 'rotating3'
@@ -158,14 +160,27 @@ export function updatePlayerResult(
     ...currentTable,
     results: currentTable.results.map((result) => {
       const isEditedPlayer = result.participantId === participantId
-      const nextResult = isEditedPlayer
+      const changedResult = isEditedPlayer
         ? { ...result, ...changes }
         : changes.wonTable === true
           ? { ...result, survived: false }
           : result
+      const nextResult = isEditedPlayer && changes.rotatingAchievementIds
+        ? {
+            ...changedResult,
+            rotatingAchievementIds: [...new Set(changes.rotatingAchievementIds)],
+          }
+        : migratePlayerResultRotatingAchievements(
+            changedResult,
+            tournament.rotatingAchievements,
+          )
       return {
         ...nextResult,
-        achievementPoints: calculateAchievementPoints(nextResult, config),
+        achievementPoints: calculateAchievementPoints(
+          nextResult,
+          config,
+          tournament.rotatingAchievements,
+        ),
       }
     }),
   }))
@@ -186,7 +201,12 @@ export function saveTableResults(
   const config = achievementPointConfigFromTournament(tournament)
   const calculatedResults = table.results.map((result) => ({
     ...result,
-    achievementPoints: calculateAchievementPoints(result, config),
+    rotatingAchievementIds: [...new Set(result.rotatingAchievementIds ?? [])],
+    achievementPoints: calculateAchievementPoints(
+      result,
+      config,
+      tournament.rotatingAchievements,
+    ),
   }))
   const savedAt = new Date().toISOString()
 

@@ -3,11 +3,14 @@ import {
   cloneAchievementConfig,
   DEFAULT_ACHIEVEMENT_CONFIG,
   DEFAULT_ROTATING_ACHIEVEMENTS,
+  normalizeRotatingAchievementSnapshots,
 } from '../domain/achievements'
+import { migrateSpecialPointMovementSnapshot } from '../domain/specialPoints'
+import { normalizeChampionPhotoReference } from '../domain/championPhotoCrop'
 import type { LeaguePrizeRepository } from './leaguePrizeRepository'
 
 export const LEAGUE_PRIZE_STORAGE_KEY = 'area52.commander-manager.league-prizes'
-export const LEAGUE_PRIZE_STORAGE_VERSION = 7
+export const LEAGUE_PRIZE_STORAGE_VERSION = 9
 
 interface StorageLike {
   getItem(key: string): string | null
@@ -27,14 +30,20 @@ export function serializeLeaguePrizeLedger(ledger: LeaguePrizeLedger): string {
 export function deserializeLeaguePrizeLedger(serialized: string): LeaguePrizeLedger | null {
   try {
     const snapshot = JSON.parse(serialized) as { version?: number; ledger?: unknown }
-    if (![1, 2, 3, 4, 5, 6, LEAGUE_PRIZE_STORAGE_VERSION].includes(snapshot.version ?? -1) || !isLeaguePrizeLedger(snapshot.ledger)) {
+    if (![1, 2, 3, 4, 5, 6, 7, 8, LEAGUE_PRIZE_STORAGE_VERSION].includes(snapshot.version ?? -1) || !isLeaguePrizeLedger(snapshot.ledger)) {
       return null
     }
     return {
       ...snapshot.ledger,
       creditMovements: snapshot.ledger.creditMovements ?? [],
-      specialPointMovements: snapshot.ledger.specialPointMovements ?? [],
-      championSnapshots: snapshot.ledger.championSnapshots ?? [],
+      specialPointMovements: (snapshot.ledger.specialPointMovements ?? [])
+        .map(migrateSpecialPointMovementSnapshot),
+      championSnapshots: (snapshot.ledger.championSnapshots ?? []).map((champion) => ({
+        ...champion,
+        championPhoto: champion.championPhoto
+          ? normalizeChampionPhotoReference(champion.championPhoto)
+          : undefined,
+      })),
       leaguePeriods: snapshot.ledger.leaguePeriods.map((period) => ({
         ...period,
         startDate: period.startDate ?? period.createdAt.slice(0, 10),
@@ -42,9 +51,14 @@ export function deserializeLeaguePrizeLedger(serialized: string): LeaguePrizeLed
         defaultAchievementConfig: period.defaultAchievementConfig
           ? cloneAchievementConfig(period.defaultAchievementConfig)
           : cloneAchievementConfig(DEFAULT_ACHIEVEMENT_CONFIG),
-        defaultRotatingAchievements: period.defaultRotatingAchievements?.length
-          ? period.defaultRotatingAchievements.slice(0, 5).map((achievement) => ({ ...achievement }))
-          : DEFAULT_ROTATING_ACHIEVEMENTS.map((achievement) => ({ ...achievement })),
+        defaultRotatingAchievements: normalizeRotatingAchievementSnapshots(
+          period.defaultRotatingAchievements?.length
+            ? period.defaultRotatingAchievements as never
+            : DEFAULT_ROTATING_ACHIEVEMENTS,
+          period.defaultAchievementConfig
+            ? cloneAchievementConfig(period.defaultAchievementConfig)
+            : cloneAchievementConfig(DEFAULT_ACHIEVEMENT_CONFIG),
+        ),
         reviewRequired: period.reviewRequired ?? false,
         financialReviewRequired:
           period.financialReviewRequired ?? period.reviewRequired ?? false,

@@ -5,15 +5,27 @@ import {
   calculateLeaguePoolSummary,
   createDefaultLeaguePeriod,
 } from '../../domain/prizes'
-import type { LeaguePeriod, LeaguePrizeLedger, Tournament } from '../../domain/tournament'
+import type {
+  LeagueAchievementDefinition,
+  LeaguePeriod,
+  LeaguePrizeLedger,
+  RotatingAchievementDefinition,
+  TournamentPenaltyDefinition,
+  Tournament,
+} from '../../domain/tournament'
 import type { PlayerIdentity } from '../../domain/playerRegistry'
 import { formatCurrency } from '../../utils/format'
 import { LeaguePeriodSettings } from './LeaguePeriodSettings'
+import { AchievementCatalogSettings } from './AchievementCatalogSettings'
+import { snapshotRotatingAchievement } from '../../domain/achievementCatalogs'
 
 interface GlobalSettingsViewProps {
   tournaments: Tournament[]
   ledger: LeaguePrizeLedger
   playerRegistry: PlayerIdentity[]
+  rotatingAchievementCatalog: RotatingAchievementDefinition[]
+  leagueAchievementCatalog: LeagueAchievementDefinition[]
+  tournamentPenaltyCatalog: TournamentPenaltyDefinition[]
   error: string | null
   onCreateLeaguePeriod: (leaguePeriod: LeaguePeriod) => string | null
   onUpdateLeaguePeriod: (
@@ -27,18 +39,27 @@ interface GlobalSettingsViewProps {
     targetPlayerKey: string,
     canonicalName: string,
   ) => string | null
+  onRotatingAchievementCatalogChange: (catalog: RotatingAchievementDefinition[]) => void
+  onLeagueAchievementCatalogChange: (catalog: LeagueAchievementDefinition[]) => void
+  onTournamentPenaltyCatalogChange: (catalog: TournamentPenaltyDefinition[]) => void
 }
 
 export function GlobalSettingsView({
   tournaments,
   ledger,
   playerRegistry,
+  rotatingAchievementCatalog,
+  leagueAchievementCatalog,
+  tournamentPenaltyCatalog,
   error,
   onCreateLeaguePeriod,
   onUpdateLeaguePeriod,
   onExportBackup,
   onImportBackup,
   onMergePlayerIdentities,
+  onRotatingAchievementCatalogChange,
+  onLeagueAchievementCatalogChange,
+  onTournamentPenaltyCatalogChange,
 }: GlobalSettingsViewProps) {
   const [editor, setEditor] = useState<{ mode: 'create' | 'edit'; league: LeaguePeriod } | null>(null)
   const [pendingFinishedUpdate, setPendingFinishedUpdate] = useState<LeaguePeriod | null>(null)
@@ -49,6 +70,14 @@ export function GlobalSettingsView({
   const [canonicalName, setCanonicalName] = useState('')
   const activePeriods = ledger.leaguePeriods.filter((period) => period.status === 'active')
   const finishedPeriods = ledger.leaguePeriods.filter((period) => period.status === 'finished')
+  const createLeagueDraft = () => {
+    const league = createDefaultLeaguePeriod()
+    const defaults = rotatingAchievementCatalog
+      .filter((definition) => definition.active)
+      .slice(0, 3)
+      .map(snapshotRotatingAchievement)
+    return { ...league, defaultRotatingAchievements: defaults }
+  }
 
   const submitLeague = (leaguePeriod: LeaguePeriod) => {
     if (editor?.mode === 'create') {
@@ -97,7 +126,7 @@ export function GlobalSettingsView({
     <section className="global-page" aria-labelledby="global-settings-title">
       <div className="global-page__heading">
         <div><p className="section-kicker">Administración local</p><h1 id="global-settings-title">Configuración</h1><p>Configuración global, ligas y valores por defecto. Los históricos no cambian silenciosamente.</p></div>
-        <button className="primary-button" type="button" onClick={() => setEditor({ mode: 'create', league: createDefaultLeaguePeriod() })}>+ Crear liga</button>
+        <button className="primary-button" type="button" onClick={() => setEditor({ mode: 'create', league: createLeagueDraft() })}>+ Crear liga</button>
       </div>
 
       <div className="global-settings-summary">
@@ -106,6 +135,14 @@ export function GlobalSettingsView({
         <div><span>Ligas finalizadas</span><strong>{finishedPeriods.length}</strong></div>
         <div><span>Movimientos especiales</span><strong>{ledger.specialPointMovements.length}</strong></div>
       </div>
+      <AchievementCatalogSettings
+        rotatingCatalog={rotatingAchievementCatalog}
+        leagueCatalog={leagueAchievementCatalog}
+        penaltyCatalog={tournamentPenaltyCatalog}
+        onRotatingCatalogChange={onRotatingAchievementCatalogChange}
+        onLeagueCatalogChange={onLeagueAchievementCatalogChange}
+        onPenaltyCatalogChange={onTournamentPenaltyCatalogChange}
+      />
       <section className="backup-settings-card" aria-labelledby="backup-settings-title">
         <div>
           <p className="section-kicker">Seguridad de datos</p>
@@ -163,6 +200,7 @@ export function GlobalSettingsView({
               key={`${editor.mode}-${editor.league.id}-${editor.league.updatedAt}`}
               leaguePeriod={editor.league}
               contributions={ledger.contributions}
+              rotatingCatalog={rotatingAchievementCatalog}
               error={error}
               submitLabel={editor.mode === 'create' ? 'Crear liga' : 'Guardar cambios'}
               onUpdate={submitLeague}

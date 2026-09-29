@@ -9,6 +9,7 @@ import type {
   Tournament,
 } from './tournament'
 import { createId } from '../utils/id'
+import { isValidChampionPhotoCrop } from './championPhotoCrop'
 
 export interface ChampionSnapshotMetadata {
   championPhoto?: ChampionPhotoReference
@@ -233,6 +234,10 @@ export function updateChampionSnapshotMetadata(
 ): LeaguePrizeLedger {
   if (!ledger.championSnapshots.some((snapshot) => snapshot.id === snapshotId)) {
     throw new DomainError('No se encontró el registro del campeón.')
+  }
+  if ([metadata.championPhoto?.cardCrop, metadata.championPhoto?.detailCrop]
+    .some((crop) => crop !== undefined && !isValidChampionPhotoCrop(crop))) {
+    throw new DomainError('El encuadre de la foto no es válido.')
   }
   const clean = (value: string | undefined) => value?.trim() || undefined
   return {

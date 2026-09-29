@@ -100,6 +100,11 @@ export function mergePlayerIdentities(
   const mergedName = canonicalName?.trim() || target.canonicalName
   const nextTournaments = tournaments.map((tournament) => ({
     ...tournament,
+    penaltyMovements: tournament.penaltyMovements.map((movement) =>
+      movement.playerKey === sourcePlayerKey
+        ? { ...movement, playerKey: targetPlayerKey }
+        : movement,
+    ),
     participants: tournament.participants.map((participant) =>
       participant.playerKey === sourcePlayerKey
         ? { ...participant, playerKey: targetPlayerKey, name: mergedName }

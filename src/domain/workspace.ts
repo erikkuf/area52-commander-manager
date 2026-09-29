@@ -1,6 +1,19 @@
-import type { Tournament } from './tournament'
+import type {
+  LeagueAchievementDefinition,
+  LeaguePrizeLedger,
+  RotatingAchievementDefinition,
+  Tournament,
+  TournamentPenaltyDefinition,
+} from './tournament'
 import type { PlayerIdentity } from './playerRegistry'
 import { buildPlayerRegistry } from './playerRegistry'
+import {
+  buildLeagueAchievementCatalog,
+  buildRotatingAchievementCatalog,
+  buildTournamentPenaltyCatalog,
+  DEFAULT_LEAGUE_ACHIEVEMENT_CATALOG,
+  DEFAULT_ROTATING_ACHIEVEMENT_CATALOG,
+} from './achievementCatalogs'
 
 export type GlobalSection = 'home' | 'leagues' | 'events' | 'hall_of_fame' | 'settings'
 export type LeagueDetailTab = 'summary' | 'dates' | 'leaderboard'
@@ -19,7 +32,12 @@ export interface AppNavigationState {
 export interface AppWorkspace {
   tournaments: Tournament[]
   playerRegistry: PlayerIdentity[]
+  rotatingAchievementCatalog: RotatingAchievementDefinition[]
+  leagueAchievementCatalog: LeagueAchievementDefinition[]
+  tournamentPenaltyCatalog: TournamentPenaltyDefinition[]
   navigation: AppNavigationState
+  /** Marcador transitorio: un respaldo antiguo aún no reconstruyó su catálogo desde el ledger. */
+  legacyLeagueCatalogNeedsRebuild?: boolean
 }
 
 export const DEFAULT_NAVIGATION_STATE: AppNavigationState = {
@@ -29,7 +47,34 @@ export const DEFAULT_NAVIGATION_STATE: AppNavigationState = {
 }
 
 export function createEmptyWorkspace(): AppWorkspace {
-  return { tournaments: [], playerRegistry: [], navigation: { ...DEFAULT_NAVIGATION_STATE } }
+  return {
+    tournaments: [],
+    playerRegistry: [],
+    rotatingAchievementCatalog: DEFAULT_ROTATING_ACHIEVEMENT_CATALOG.map((item) => ({ ...item })),
+    leagueAchievementCatalog: DEFAULT_LEAGUE_ACHIEVEMENT_CATALOG.map((item) => ({ ...item })),
+    tournamentPenaltyCatalog: [],
+    navigation: { ...DEFAULT_NAVIGATION_STATE },
+  }
+}
+
+export function ensureWorkspaceAchievementCatalogs(
+  workspace: AppWorkspace,
+  ledger?: LeaguePrizeLedger,
+): AppWorkspace {
+  const { legacyLeagueCatalogNeedsRebuild, ...persistableWorkspace } = workspace
+  return {
+    ...persistableWorkspace,
+    rotatingAchievementCatalog: buildRotatingAchievementCatalog(
+      workspace.rotatingAchievementCatalog,
+      workspace.tournaments,
+      ledger?.leaguePeriods,
+    ),
+    leagueAchievementCatalog: buildLeagueAchievementCatalog(
+      legacyLeagueCatalogNeedsRebuild ? undefined : workspace.leagueAchievementCatalog,
+      ledger?.specialPointMovements,
+    ),
+    tournamentPenaltyCatalog: buildTournamentPenaltyCatalog(workspace.tournamentPenaltyCatalog),
+  }
 }
 
 export function upsertWorkspaceTournament(

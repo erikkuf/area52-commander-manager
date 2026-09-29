@@ -87,6 +87,7 @@ describe('registro estable de jugadores', () => {
     dateCreditConfig: { prizePool: 0, percentagesByPosition: [] },
     participants: [{ id: `${id}-p`, playerKey, name, active: true, isGhost: false }],
     rounds: [],
+    penaltyMovements: [],
     ghostPairingAuthorized: false,
     financialReviewRequired: false,
     createdAt: '2026-08-19T12:00:00.000Z',

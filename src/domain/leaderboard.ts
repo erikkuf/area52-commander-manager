@@ -7,6 +7,7 @@ export interface TournamentStandingEntry {
   position: number
   achievementPoints: number
   achievementCount: number
+  penaltyPoints: number
   specialLeaguePoints: number
   totalPoints: number
   savedTables: number
@@ -37,6 +38,7 @@ function buildTournamentStanding(
         participantId: participant.id,
         achievementPoints: 0,
         achievementCount: 0,
+        penaltyPoints: 0,
         specialLeaguePoints: 0,
         totalPoints: 0,
         savedTables: 0,
@@ -55,6 +57,7 @@ function buildTournamentStanding(
         entry.achievementCount += calculateAchievementCount(
           result,
           tournament.achievementConfig,
+          tournament.rotatingAchievements,
         )
         entry.specialLeaguePoints += result.specialLeaguePoints
         // Alpha 0.1 ordena la fecha por logros. Los puntos especiales se mantienen
@@ -65,6 +68,19 @@ function buildTournamentStanding(
         entry.eliminations += result.eliminations
       })
     })
+  })
+
+  const participantIdByPlayerKey = new Map(
+    tournament.participants.filter((participant) => !participant.isGhost)
+      .map((participant) => [participant.playerKey, participant.id]),
+  )
+  ;(tournament.penaltyMovements ?? []).forEach((movement) => {
+    if (movement.status !== 'active' || movement.tournamentId !== tournament.id) return
+    const participantId = participantIdByPlayerKey.get(movement.playerKey)
+    const entry = participantId ? totals.get(participantId) : undefined
+    if (!entry) return
+    entry.penaltyPoints += movement.amount
+    entry.totalPoints += movement.amount
   })
 
   const names = new Map(

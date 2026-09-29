@@ -49,7 +49,7 @@ describe('persistencia de ligas y aportes', () => {
     expect(restored?.leaguePeriods[0].defaultAchievementConfig.win.points).toBe(3)
     expect(restored?.leaguePeriods[0].startDate).toBe('2026-08-14')
     expect(restored?.leaguePeriods[0]).toMatchObject({ financialReviewRequired: false, wasReopened: false })
-    expect(LEAGUE_PRIZE_STORAGE_VERSION).toBe(7)
+    expect(LEAGUE_PRIZE_STORAGE_VERSION).toBe(9)
   })
 
   it('migra versión 4 conservando premios y revisión financiera', () => {
@@ -65,6 +65,24 @@ describe('persistencia de ligas y aportes', () => {
       ledger.leaguePeriods[0].finalizedMonthlyAwards,
     )
     expect(restored?.leaguePeriods[0].financialReviewRequired).toBe(true)
+  })
+
+  it('agrega snapshot de metadata a movimientos especiales legacy', () => {
+    const ledger = createDefaultLeaguePrizeLedger(() => 'league-1', '2026-08-14T12:00:00.000Z')
+    ledger.specialPointMovements = [{
+      id: 'legacy-special',
+      leaguePeriodId: ledger.leaguePeriods[0].id,
+      playerKey: 'player-a',
+      amount: -2,
+      reason: 'Ajuste histórico',
+      createdAt: '2026-08-14T12:00:00.000Z',
+      status: 'active',
+    } as never]
+    const restored = deserializeLeaguePrizeLedger(JSON.stringify({ version: 7, ledger }))!
+    expect(restored.specialPointMovements[0]).toMatchObject({
+      name: 'Ajuste histórico',
+      amount: -2,
+    })
   })
 
   it('persiste snapshots y referencias de foto sin incluir el archivo binario', () => {

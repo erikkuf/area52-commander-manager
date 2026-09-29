@@ -2,12 +2,15 @@ import { useState } from 'react'
 import { CloseIcon } from '../../components/icons'
 import {
   achievementConfigsEqual,
+  rotatingAchievementSnapshotsEqual,
   tournamentHasRecordedResults,
 } from '../../domain/achievements'
 import { calculateTournamentPrizeSummary } from '../../domain/prizes'
 import type {
   LeaguePeriod,
   LeaguePoolContribution,
+  LeaguePrizeLedger,
+  RotatingAchievementDefinition,
   Tournament,
   TournamentConfigInput,
 } from '../../domain/tournament'
@@ -18,11 +21,15 @@ import {
 import { formatCurrency } from '../../utils/format'
 import { TournamentForm } from '../setup/TournamentForm'
 import { PAIRING_MODE_LABELS } from '../../domain/pairing'
+import { assessTournamentDeletion } from '../../domain/tournamentDeletion'
 
 interface SettingsViewProps {
   tournament: Tournament
   leaguePeriods: LeaguePeriod[]
   contributions: LeaguePoolContribution[]
+  rotatingCatalog: RotatingAchievementDefinition[]
+  ledger: LeaguePrizeLedger
+  onDelete: () => string | null
   error: string | null
   onUpdate: (
     config: TournamentConfigInput,
@@ -37,9 +44,9 @@ function toConfigInput(tournament: Tournament): TournamentConfigInput {
     date: tournament.date,
     totalRounds: tournament.totalRounds,
     pairingMode: tournament.pairingMode,
-    rotating1: tournament.rotatingAchievements[0]?.label ?? '',
-    rotating2: tournament.rotatingAchievements[1]?.label ?? '',
-    rotating3: tournament.rotatingAchievements[2]?.label ?? '',
+    rotating1: tournament.rotatingAchievements[0]?.name ?? '',
+    rotating2: tournament.rotatingAchievements[1]?.name ?? '',
+    rotating3: tournament.rotatingAchievements[2]?.name ?? '',
     rotatingAchievements: tournament.rotatingAchievements.map((achievement) => ({
       ...achievement,
     })),
@@ -59,11 +66,18 @@ export function SettingsView({
   tournament,
   leaguePeriods,
   contributions: _contributions,
+  rotatingCatalog,
+  ledger,
+  onDelete,
   error,
   onUpdate,
   onExit,
 }: SettingsViewProps) {
   const [editing, setEditing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const deletion = assessTournamentDeletion(tournament, ledger)
+  const eventLabel = tournament.type === 'league_date' ? 'fecha' : 'evento'
   const [pendingConfig, setPendingConfig] = useState<TournamentConfigInput | null>(null)
   const selectedLeague = leaguePeriods.find((period) => period.id === tournament.leaguePeriodId)
   const prizeSummary = calculateTournamentPrizeSummary(tournament, selectedLeague)
@@ -81,8 +95,12 @@ export function SettingsView({
       config.achievementConfig ?? tournament.achievementConfig,
     )
     const assessment = assessRoundReduction(tournament, config.totalRounds)
+    const rotatingChanged = !rotatingAchievementSnapshotsEqual(
+      tournament.rotatingAchievements,
+      config.rotatingAchievements as Tournament['rotatingAchievements'],
+    )
     const needsConfirmation =
-      (achievementChanged && tournamentHasRecordedResults(tournament)) ||
+      ((achievementChanged || rotatingChanged) && tournamentHasRecordedResults(tournament)) ||
       assessment.removableRoundNumbers.length > 0 ||
       tournament.status === 'finished'
     if (needsConfirmation) {
@@ -134,7 +152,7 @@ export function SettingsView({
             <div><span>Ganar mesa</span><strong>{rules.win.enabled ? `${rules.win.points} pts.` : 'Desactivado'}</strong></div>
             <div><span>Eliminación</span><strong>{rules.elimination.enabled ? `${rules.elimination.points} pts.` : 'Desactivado'}</strong></div>
             <div><span>Sobrevivir</span><strong>{rules.survival.enabled ? `${rules.survival.points} pts.` : 'Desactivado'}</strong></div>
-            <div><span>Rotativos</span><strong>{tournament.rotatingAchievements.filter((achievement) => rules[achievement.id]?.enabled).length} / {tournament.rotatingAchievements.length} activos</strong></div>
+            <div><span>Rotativos</span><strong>{tournament.rotatingAchievements.filter((achievement) => achievement.enabled).length} / {tournament.rotatingAchievements.length} seleccionados</strong></div>
           </div>
           <div className="league-settings-actions">
             <small>Los cambios con resultados requieren recálculo explícito.</small>
@@ -142,6 +160,27 @@ export function SettingsView({
           </div>
         </article>
       </div>
+
+      <section className="settings-card tournament-danger-zone" aria-labelledby="danger-zone-title">
+        <p className="section-kicker">Zona de peligro</p>
+        <h3 id="danger-zone-title">Eliminar {tournament.type === 'league_date' ? 'esta fecha' : 'este evento'}</h3>
+        <p>Disponible únicamente antes de generar la primera ronda.</p>
+        {!deletion.allowed && <p className="field-help">{deletion.reason}</p>}
+        <button className="danger-outline-button" type="button" disabled={!deletion.allowed} onClick={() => { setConfirmDelete(true); setDeleteError(null) }}>Eliminar {eventLabel}</button>
+      </section>
+
+      {confirmDelete && (
+        <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="delete-event-title">
+          <button className="modal-backdrop" type="button" aria-label="Cancelar" onClick={() => setConfirmDelete(false)} />
+          <section className="swap-modal">
+            <div className="modal-header"><h2 id="delete-event-title">Eliminar “{tournament.name}”</h2></div>
+            <p className="modal-copy">Se eliminarán {tournament.type === 'league_date' ? 'esta fecha' : 'este evento'}, sus participantes inscritos y su configuración. Esta acción no se puede deshacer.</p>
+            <p className="modal-copy">Los datos históricos de otras fechas no serán modificados.</p>
+            {deleteError && <p className="form-message form-message--error">{deleteError}</p>}
+            <div className="modal-actions"><button className="secondary-button" type="button" onClick={() => setConfirmDelete(false)}>Cancelar</button><button className="danger-button" type="button" onClick={() => setDeleteError(onDelete())}>Eliminar {eventLabel}</button></div>
+          </section>
+        </div>
+      )}
 
       {editing && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="edit-event-title">
@@ -155,6 +194,7 @@ export function SettingsView({
               key={tournament.updatedAt}
               initialValue={toConfigInput(tournament)}
               leaguePeriods={leaguePeriods}
+              rotatingCatalog={rotatingCatalog}
               prizePlayerCount={tournament.prizePlayerCount}
               submitLabel="Guardar cambios"
               error={error}

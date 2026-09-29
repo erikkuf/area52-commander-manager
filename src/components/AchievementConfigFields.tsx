@@ -1,15 +1,13 @@
-import { ROTATING_ACHIEVEMENT_IDS } from '../domain/achievements'
 import type {
   AchievementConfig,
   AchievementRule,
-  RotatingAchievementConfig,
-  RotatingAchievementId,
+  TournamentRotatingAchievementSnapshot,
 } from '../domain/tournament'
 
 interface AchievementConfigFieldsProps {
   value: AchievementConfig
   onChange: (value: AchievementConfig) => void
-  rotatingAchievements?: RotatingAchievementConfig[]
+  rotatingAchievements?: TournamentRotatingAchievementSnapshot[]
 }
 
 const BASE_RULES: Array<{ key: 'win' | 'elimination' | 'survival'; label: string }> = [
@@ -21,43 +19,18 @@ const BASE_RULES: Array<{ key: 'win' | 'elimination' | 'survival'; label: string
 export function AchievementConfigFields({
   value,
   onChange,
-  rotatingAchievements,
 }: AchievementConfigFieldsProps) {
-  const rotatingKeys = (rotatingAchievements?.map((achievement) => achievement.id) ??
-    ROTATING_ACHIEVEMENT_IDS.slice(0, 3)) as RotatingAchievementId[]
-  const allRotatingEnabled = rotatingKeys.every((key) => value[key]?.enabled)
-  const rules: Array<{ key: RotatingAchievementId | 'win' | 'elimination' | 'survival'; label: string }> = [
-    ...rotatingKeys.map((key, index) => ({
-      key,
-      label: rotatingAchievements?.find((achievement) => achievement.id === key)?.label || `Rotativo ${index + 1}`,
-    })),
-    ...BASE_RULES,
-  ]
+  const rules = BASE_RULES
 
   const updateRule = (
-    key: RotatingAchievementId | 'win' | 'elimination' | 'survival',
+    key: 'win' | 'elimination' | 'survival',
     changes: Partial<AchievementRule>,
   ) => {
-    onChange({ ...value, [key]: { enabled: true, points: 1, ...value[key], ...changes } })
+    onChange({ ...value, [key]: { ...(value[key] ?? { enabled: true, points: 1 }), ...changes } })
   }
 
   return (
     <div className="achievement-config-fields">
-      <label className="switch-field achievement-group-toggle">
-        <input
-          type="checkbox"
-          checked={allRotatingEnabled}
-          onChange={() => {
-            const enabled = !allRotatingEnabled
-            onChange(rotatingKeys.reduce<AchievementConfig>((config, key) => ({
-              ...config,
-              [key]: { points: 1, ...config[key], enabled },
-            }), { ...value }))
-          }}
-        />
-        <span>Usar logros rotativos</span>
-      </label>
-
       <div className="achievement-rule-grid">
         {rules.map(({ key, label }) => {
           const rule = value[key] ?? { enabled: true, points: 1 }
@@ -85,7 +58,7 @@ export function AchievementConfigFields({
         )})}
       </div>
       <p className="field-help">
-        Desactivar un logro impide que otorgue puntos, pero conserva los hechos ya registrados.
+        Estas reglas fijas son independientes del catálogo de logros rotativos.
       </p>
     </div>
   )

@@ -1,16 +1,17 @@
 import { useState, type FormEvent } from 'react'
 import { AchievementConfigFields } from '../../components/AchievementConfigFields'
+import { RotatingAchievementSelector } from '../../components/RotatingAchievementSelector'
 import { PrizePercentageEditor } from '../../components/PrizePercentageEditor'
 import {
   cloneAchievementConfig,
   DEFAULT_ACHIEVEMENT_CONFIG,
-  MAX_ROTATING_ACHIEVEMENTS,
-  ROTATING_ACHIEVEMENT_IDS,
+  normalizeRotatingAchievementSnapshots,
 } from '../../domain/achievements'
 import type {
   LeaguePeriod,
-  RotatingAchievementConfig,
+  RotatingAchievementDefinition,
   TournamentConfigInput,
+  TournamentRotatingAchievementSnapshot,
 } from '../../domain/tournament'
 import { formatCurrency } from '../../utils/format'
 import {
@@ -22,6 +23,7 @@ import { defaultTournamentConfig } from './tournamentFormDefaults'
 interface TournamentFormProps {
   initialValue?: TournamentConfigInput
   leaguePeriods: LeaguePeriod[]
+  rotatingCatalog: RotatingAchievementDefinition[]
   prizePlayerCount?: number
   submitLabel: string
   error?: string | null
@@ -33,6 +35,7 @@ interface TournamentFormProps {
 export function TournamentForm({
   initialValue = defaultTournamentConfig,
   leaguePeriods,
+  rotatingCatalog,
   prizePlayerCount = 0,
   submitLabel,
   error,
@@ -43,13 +46,14 @@ export function TournamentForm({
   const [form, setForm] = useState<TournamentConfigInput>(() => ({
     ...initialValue,
     percentagesByPosition: [...initialValue.percentagesByPosition],
-    rotatingAchievements: (
+    rotatingAchievements: normalizeRotatingAchievementSnapshots(
       initialValue.rotatingAchievements ?? [
         { id: 'rotating1', label: initialValue.rotating1, points: 1 },
         { id: 'rotating2', label: initialValue.rotating2, points: 1 },
         { id: 'rotating3', label: initialValue.rotating3, points: 1 },
-      ]
-    ).map((achievement) => ({ ...achievement })),
+      ],
+      initialValue.achievementConfig ?? DEFAULT_ACHIEVEMENT_CONFIG,
+    ),
     achievementConfig: cloneAchievementConfig(
       initialValue.achievementConfig ?? DEFAULT_ACHIEVEMENT_CONFIG,
     ),
@@ -60,20 +64,13 @@ export function TournamentForm({
   const isLeague = form.prizeMode === 'league_auto'
   const selectedLeague = leaguePeriods.find((period) => period.id === form.leaguePeriodId)
 
-  const updateRotatingAchievements = (rotatingAchievements: RotatingAchievementConfig[]) => {
+  const updateRotatingAchievements = (rotatingAchievements: TournamentRotatingAchievementSnapshot[]) => {
     setForm((current) => ({
       ...current,
       rotatingAchievements,
-      rotating1: rotatingAchievements[0]?.label ?? '',
-      rotating2: rotatingAchievements[1]?.label ?? '',
-      rotating3: rotatingAchievements[2]?.label ?? '',
-      achievementConfig: {
-        ...(current.achievementConfig ?? DEFAULT_ACHIEVEMENT_CONFIG),
-        ...Object.fromEntries(rotatingAchievements.map((achievement) => [
-          achievement.id,
-          current.achievementConfig?.[achievement.id] ?? { enabled: true, points: 1 },
-        ])),
-      },
+      rotating1: rotatingAchievements[0]?.name ?? '',
+      rotating2: rotatingAchievements[1]?.name ?? '',
+      rotating3: rotatingAchievements[2]?.name ?? '',
     }))
   }
 
@@ -207,44 +204,16 @@ export function TournamentForm({
               <p>Define qué logros se usan y cuánto vale cada uno.</p>
             </div>
           </div>
-          <div className="achievement-fields">
-            {(form.rotatingAchievements ?? []).map((achievement, index) => (
-              <div className="rotating-achievement-row" key={achievement.id}>
-              <label className="field">
-                <span>Rotativo {index + 1}</span>
-                <input
-                  required
-                  type="text"
-                  value={achievement.label}
-                  onChange={(event) => updateRotatingAchievements(
-                    (form.rotatingAchievements ?? []).map((item) =>
-                      item.id === achievement.id ? { ...item, label: event.target.value } : item,
-                    ),
-                  )}
-                />
-              </label>
-              {(form.rotatingAchievements?.length ?? 0) > 1 && (
-                <button className="remove-position-button" type="button" onClick={() =>
-                  updateRotatingAchievements((form.rotatingAchievements ?? []).filter((item) => item.id !== achievement.id))
-                }>Quitar</button>
-              )}
-              </div>
-            ))}
-          </div>
-          {(form.rotatingAchievements?.length ?? 0) < MAX_ROTATING_ACHIEVEMENTS && (
-            <button className="text-button" type="button" onClick={() => {
-              const used = new Set((form.rotatingAchievements ?? []).map((achievement) => achievement.id))
-              const nextId = ROTATING_ACHIEVEMENT_IDS.find((id) => !used.has(id))
-              if (nextId) updateRotatingAchievements([
-                ...(form.rotatingAchievements ?? []),
-                { id: nextId, label: `Logro rotativo ${(form.rotatingAchievements?.length ?? 0) + 1}`, points: 1 },
-              ])
-            }}>+ Agregar logro rotativo</button>
-          )}
-          <p className="field-help">Puedes usar entre 1 y {MAX_ROTATING_ACHIEVEMENTS} logros rotativos.</p>
+          <RotatingAchievementSelector
+            catalog={rotatingCatalog}
+            value={normalizeRotatingAchievementSnapshots(
+              form.rotatingAchievements,
+              form.achievementConfig ?? DEFAULT_ACHIEVEMENT_CONFIG,
+            )}
+            onChange={updateRotatingAchievements}
+          />
           <AchievementConfigFields
             value={form.achievementConfig ?? DEFAULT_ACHIEVEMENT_CONFIG}
-            rotatingAchievements={form.rotatingAchievements}
             onChange={(achievementConfig) => setForm((current) => ({ ...current, achievementConfig }))}
           />
         </div>

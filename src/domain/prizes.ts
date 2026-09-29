@@ -130,7 +130,13 @@ export function validateLeaguePeriod(leaguePeriod: LeaguePeriod): string[] {
   if (
     leaguePeriod.defaultRotatingAchievements.length < 1 ||
     leaguePeriod.defaultRotatingAchievements.length > MAX_ROTATING_ACHIEVEMENTS ||
-    leaguePeriod.defaultRotatingAchievements.some((achievement) => !achievement.label.trim())
+    leaguePeriod.defaultRotatingAchievements.some(
+      (achievement) =>
+        !achievement.name.trim() ||
+        !Number.isInteger(achievement.points),
+    ) ||
+    new Set(leaguePeriod.defaultRotatingAchievements.map((achievement) => achievement.id)).size !==
+      leaguePeriod.defaultRotatingAchievements.length
   ) {
     errors.push(`La liga debe tener entre 1 y ${MAX_ROTATING_ACHIEVEMENTS} logros rotativos con nombre.`)
   }

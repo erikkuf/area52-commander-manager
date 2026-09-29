@@ -1,11 +1,13 @@
-import type { LeaguePeriod, TournamentConfigInput } from '../../domain/tournament'
+import type { LeaguePeriod, RotatingAchievementDefinition, TournamentConfigInput } from '../../domain/tournament'
 import { cloneAchievementConfig, DEFAULT_ACHIEVEMENT_CONFIG } from '../../domain/achievements'
 import { TournamentForm } from './TournamentForm'
 import { defaultTournamentConfig } from './tournamentFormDefaults'
+import { snapshotRotatingAchievement } from '../../domain/achievementCatalogs'
 
 interface CreateTournamentViewProps {
   error?: string | null
   leaguePeriods: LeaguePeriod[]
+  rotatingCatalog: RotatingAchievementDefinition[]
   defaultType?: 'league_date' | 'independent'
   embedded?: boolean
   onCancel?: () => void
@@ -15,6 +17,7 @@ interface CreateTournamentViewProps {
 export function CreateTournamentView({
   error,
   leaguePeriods,
+  rotatingCatalog,
   defaultType = 'league_date',
   embedded = false,
   onCancel,
@@ -23,6 +26,10 @@ export function CreateTournamentView({
   const inheritedLeague = leaguePeriods.find(
     (period) => period.status === 'active',
   )
+  const activeCatalogDefaults = rotatingCatalog
+    .filter((definition) => definition.active)
+    .slice(0, 3)
+    .map(snapshotRotatingAchievement)
   const initialValue: TournamentConfigInput = {
     ...defaultTournamentConfig,
     type: defaultType,
@@ -33,6 +40,9 @@ export function CreateTournamentView({
         ? inheritedLeague.defaultAchievementConfig
         : DEFAULT_ACHIEVEMENT_CONFIG,
     ),
+    rotatingAchievements: defaultType === 'league_date' && inheritedLeague
+      ? inheritedLeague.defaultRotatingAchievements.map((achievement) => ({ ...achievement }))
+      : activeCatalogDefaults,
   }
   const content = (
     <main className={embedded ? 'global-page create-event-page' : 'welcome-main'}>
@@ -48,6 +58,7 @@ export function CreateTournamentView({
       <TournamentForm
         initialValue={initialValue}
         leaguePeriods={leaguePeriods}
+        rotatingCatalog={rotatingCatalog}
         submitLabel="Crear torneo"
         error={error}
         onSubmit={onCreate}

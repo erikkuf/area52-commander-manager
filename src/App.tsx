@@ -22,15 +22,18 @@ import {
 } from './domain/prizes'
 import type { LeaguePeriod, LeaguePrizeLedger, Tournament, TournamentConfigInput } from './domain/tournament'
 import { createTournament } from './domain/tournamentOperations'
+import { deleteSetupTournament } from './domain/tournamentDeletion'
 import {
   migrateLegacySpecialPointMovements,
   registerSpecialPointMovement,
+  type SpecialPointMovementDraft,
   voidSpecialPointMovement,
 } from './domain/specialPoints'
 import { mergePlayerIdentities, resolveRegisteredPlayerKey } from './domain/playerRegistry'
 import { importCreditUsageMovements } from './domain/creditImport'
 import {
   createEmptyWorkspace,
+  ensureWorkspaceAchievementCatalogs,
   mergeLegacyTournament,
   upsertWorkspaceTournament,
   type AppWorkspace,
@@ -129,11 +132,15 @@ export function App() {
           ),
           restoredWorkspace.tournaments,
         )
-        setWorkspace(restoredWorkspace)
+        const catalogWorkspace = ensureWorkspaceAchievementCatalogs(
+          restoredWorkspace,
+          restoredLedger,
+        )
+        setWorkspace(catalogWorkspace)
         setLeagueLedger(restoredLedger)
         if (!unifiedState) {
           await appStateRepository.saveState({
-            workspace: restoredWorkspace,
+            workspace: catalogWorkspace,
             ledger: restoredLedger,
           })
         }
@@ -301,11 +308,35 @@ export function App() {
         tournament={openedTournament}
         leaguePeriods={leagueLedger.leaguePeriods}
         ledger={leagueLedger}
+        rotatingAchievementCatalog={workspace.rotatingAchievementCatalog}
+        tournamentPenaltyCatalog={workspace.tournamentPenaltyCatalog}
+        tournaments={workspace.tournaments}
         storageStatus={storageStatus}
         activeView={workspace.navigation.managerView}
         onActiveViewChange={(managerView: TournamentManagerView) => updateNavigation({ managerView })}
         onTournamentChange={handleTournamentChange}
+        onDeleteTournament={() => {
+          try {
+            const next = deleteSetupTournament(workspace, leagueLedger, openedTournament.id)
+            setWorkspace(next.workspace)
+            setLeagueLedger(next.ledger)
+            setFeedback(`${openedTournament.name} fue eliminado. Los datos históricos se conservaron.`)
+            return null
+          } catch (error) {
+            return messageFromError(error)
+          }
+        }}
         onHistoricalCorrection={(leaguePeriodId) => setLeagueLedger((current) => current ? markLeagueReviewRequired(current, leaguePeriodId) : current)}
+        onLeaguePenaltyChange={(leaguePeriodId, financialImpact) => setLeagueLedger((current) => {
+          if (!current) return current
+          if (financialImpact) return markLeagueReviewRequired(current, leaguePeriodId)
+          return {
+            ...current,
+            leaguePeriods: current.leaguePeriods.map((period) => period.id === leaguePeriodId
+              ? { ...period, administrativeLeaderboardPlayerKeys: undefined }
+              : period),
+          }
+        })}
         onApplyDateCreditCorrections={() => {
           try {
             setLeagueLedger((current) => {
@@ -349,6 +380,7 @@ export function App() {
           defaultType={workspace.navigation.creationType}
           error={feedback}
           leaguePeriods={leagueLedger.leaguePeriods}
+          rotatingCatalog={workspace.rotatingAchievementCatalog}
           onCancel={() => navigate('home')}
           onCreate={handleCreateTournament}
         />
@@ -357,6 +389,7 @@ export function App() {
           leaguePeriod={selectedLeague}
           tournaments={workspace.tournaments}
           ledger={leagueLedger}
+          leagueAchievementCatalog={workspace.leagueAchievementCatalog}
           playerRegistry={workspace.playerRegistry}
           activeTab={workspace.navigation.leagueDetailTab}
           onTabChange={(leagueDetailTab: LeagueDetailTab) => updateNavigation({ leagueDetailTab })}
@@ -478,7 +511,7 @@ export function App() {
               return messageFromError(error)
             }
           }}
-          onRegisterSpecialPoint={(playerKey, amount, reason) => {
+          onRegisterSpecialPoint={(playerKey, movement: SpecialPointMovementDraft) => {
             try {
               setLeagueLedger((current) => {
                 if (!current) return current
@@ -487,8 +520,15 @@ export function App() {
                   current.specialPointMovements,
                   selectedLeague.id,
                   playerKey,
-                  amount,
-                  reason,
+                  movement.amount,
+                  movement.reason,
+                  undefined,
+                  undefined,
+                  {
+                    sourceDefinitionId: movement.sourceDefinitionId,
+                    name: movement.name,
+                    description: movement.description,
+                  },
                 )
                 const next = { ...current, specialPointMovements }
                 return period && (period.status === 'finished' || period.wasReopened)
@@ -550,6 +590,9 @@ export function App() {
           tournaments={workspace.tournaments}
           ledger={leagueLedger}
           playerRegistry={workspace.playerRegistry}
+          rotatingAchievementCatalog={workspace.rotatingAchievementCatalog}
+          leagueAchievementCatalog={workspace.leagueAchievementCatalog}
+          tournamentPenaltyCatalog={workspace.tournamentPenaltyCatalog}
           error={feedback}
           onCreateLeaguePeriod={(leaguePeriod) => {
             try {
@@ -580,7 +623,7 @@ export function App() {
                 ),
                 imported.workspace.tournaments,
               )
-              const importedWorkspace = {
+              const importedWorkspace = ensureWorkspaceAchievementCatalogs({
                 ...imported.workspace,
                 navigation: {
                   ...imported.workspace.navigation,
@@ -589,7 +632,7 @@ export function App() {
                   selectedLeaguePeriodId: undefined,
                   creationType: undefined,
                 },
-              }
+              }, synchronizedLedger)
               await appStateRepository.saveState({
                 workspace: importedWorkspace,
                 ledger: synchronizedLedger,
@@ -623,6 +666,18 @@ export function App() {
               return messageFromError(error)
             }
           }}
+          onRotatingAchievementCatalogChange={(rotatingAchievementCatalog) => setWorkspace((current) => current ? {
+            ...current,
+            rotatingAchievementCatalog,
+          } : current)}
+          onLeagueAchievementCatalogChange={(leagueAchievementCatalog) => setWorkspace((current) => current ? {
+            ...current,
+            leagueAchievementCatalog,
+          } : current)}
+          onTournamentPenaltyCatalogChange={(tournamentPenaltyCatalog) => setWorkspace((current) => current ? {
+            ...current,
+            tournamentPenaltyCatalog,
+          } : current)}
         />
       )}
     </div>

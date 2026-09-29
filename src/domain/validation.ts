@@ -1,5 +1,5 @@
 import type { TournamentConfigInput } from './tournament'
-import { DEFAULT_ACHIEVEMENT_CONFIG } from './achievements'
+import { DEFAULT_ACHIEVEMENT_CONFIG, normalizeRotatingAchievementSnapshots } from './achievements'
 import { MAX_ROTATING_ACHIEVEMENTS } from './achievements'
 
 export function validateTournamentConfig(input: TournamentConfigInput): string[] {
@@ -18,24 +18,27 @@ export function validateTournamentConfig(input: TournamentConfigInput): string[]
     errors.push('Selecciona un sistema de emparejamiento válido.')
   }
 
-  const rotatingAchievements = input.rotatingAchievements ?? [
+  const rotatingAchievements = normalizeRotatingAchievementSnapshots(input.rotatingAchievements ?? [
     { id: 'rotating1' as const, label: input.rotating1, points: 1 },
     { id: 'rotating2' as const, label: input.rotating2, points: 1 },
     { id: 'rotating3' as const, label: input.rotating3, points: 1 },
-  ]
+  ], input.achievementConfig ?? DEFAULT_ACHIEVEMENT_CONFIG)
   if (rotatingAchievements.length < 1 || rotatingAchievements.length > MAX_ROTATING_ACHIEVEMENTS) {
     errors.push(`Debes configurar entre 1 y ${MAX_ROTATING_ACHIEVEMENTS} logros rotativos.`)
   }
-  if (rotatingAchievements.some((achievement) => !achievement.label.trim())) {
+  if (rotatingAchievements.some((achievement) => !achievement.name.trim())) {
     errors.push('Todos los logros rotativos deben tener un nombre.')
   }
   if (new Set(rotatingAchievements.map((achievement) => achievement.id)).size !== rotatingAchievements.length) {
     errors.push('Los identificadores de logros rotativos no pueden repetirse.')
   }
+  if (rotatingAchievements.some((achievement) => !Number.isInteger(achievement.points))) {
+    errors.push('Los valores rotativos deben ser enteros.')
+  }
 
   const achievementConfig = input.achievementConfig ?? DEFAULT_ACHIEVEMENT_CONFIG
   if (
-    Object.values(achievementConfig).filter(Boolean).some(
+    [achievementConfig.win, achievementConfig.elimination, achievementConfig.survival].some(
       (rule) => !Number.isFinite(rule.points) || rule.points < 0,
     )
   ) {

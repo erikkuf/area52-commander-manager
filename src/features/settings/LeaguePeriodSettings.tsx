@@ -1,22 +1,22 @@
 import { useState, type FormEvent } from 'react'
 import { AchievementConfigFields } from '../../components/AchievementConfigFields'
+import { RotatingAchievementSelector } from '../../components/RotatingAchievementSelector'
 import { PrizePercentageEditor } from '../../components/PrizePercentageEditor'
 import {
   cloneAchievementConfig,
-  MAX_ROTATING_ACHIEVEMENTS,
-  ROTATING_ACHIEVEMENT_IDS,
 } from '../../domain/achievements'
 import {
   calculateLeaguePoolSummary,
   rebalanceLeagueContribution,
   type LeagueContributionField,
 } from '../../domain/prizes'
-import type { LeaguePeriod, LeaguePoolContribution } from '../../domain/tournament'
+import type { LeaguePeriod, LeaguePoolContribution, RotatingAchievementDefinition } from '../../domain/tournament'
 import { formatCurrency } from '../../utils/format'
 
 interface LeaguePeriodSettingsProps {
   leaguePeriod: LeaguePeriod
   contributions: LeaguePoolContribution[]
+  rotatingCatalog: RotatingAchievementDefinition[]
   error: string | null
   submitLabel?: string
   onUpdate: (leaguePeriod: LeaguePeriod) => void
@@ -25,6 +25,7 @@ interface LeaguePeriodSettingsProps {
 export function LeaguePeriodSettings({
   leaguePeriod,
   contributions,
+  rotatingCatalog,
   error,
   submitLabel = 'Guardar configuración de liga',
   onUpdate,
@@ -152,45 +153,14 @@ export function LeaguePeriodSettings({
       <div className="league-settings-section">
         <h4>Configuración default de logros</h4>
         <p className="field-help">Se copiará solo a nuevas fechas. Las fechas existentes no cambian.</p>
-        <div className="achievement-fields">
-          {draft.defaultRotatingAchievements.map((achievement, index) => (
-            <div className="rotating-achievement-row" key={achievement.id}>
-              <label className="field">
-                <span>Rotativo {index + 1}</span>
-                <input value={achievement.label} onChange={(event) => setDraft((current) => ({
-                  ...current,
-                  defaultRotatingAchievements: current.defaultRotatingAchievements.map((item) =>
-                    item.id === achievement.id ? { ...item, label: event.target.value } : item,
-                  ),
-                }))} />
-              </label>
-              {draft.defaultRotatingAchievements.length > 1 && (
-                <button className="remove-position-button" type="button" onClick={() => setDraft((current) => ({
-                  ...current,
-                  defaultRotatingAchievements: current.defaultRotatingAchievements.filter((item) => item.id !== achievement.id),
-                }))}>Quitar</button>
-              )}
-            </div>
-          ))}
-        </div>
-        {draft.defaultRotatingAchievements.length < MAX_ROTATING_ACHIEVEMENTS && (
-          <button className="text-button" type="button" onClick={() => setDraft((current) => {
-            const used = new Set(current.defaultRotatingAchievements.map((achievement) => achievement.id))
-            const nextId = ROTATING_ACHIEVEMENT_IDS.find((id) => !used.has(id))
-            if (!nextId) return current
-            return {
-              ...current,
-              defaultRotatingAchievements: [
-                ...current.defaultRotatingAchievements,
-                { id: nextId, label: `Logro rotativo ${current.defaultRotatingAchievements.length + 1}`, points: 1 },
-              ],
-              defaultAchievementConfig: {
-                ...current.defaultAchievementConfig,
-                [nextId]: { enabled: true, points: 1 },
-              },
-            }
-          })}>+ Agregar logro rotativo</button>
-        )}
+        <RotatingAchievementSelector
+          catalog={rotatingCatalog}
+          value={draft.defaultRotatingAchievements}
+          onChange={(defaultRotatingAchievements) => setDraft((current) => ({
+            ...current,
+            defaultRotatingAchievements,
+          }))}
+        />
         <AchievementConfigFields
           value={draft.defaultAchievementConfig}
           rotatingAchievements={draft.defaultRotatingAchievements}

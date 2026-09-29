@@ -2,10 +2,15 @@ import type { AppWorkspace, AppNavigationState } from '../domain/workspace'
 import { DEFAULT_NAVIGATION_STATE } from '../domain/workspace'
 import { migrateTournament } from './localStorageTournamentRepository'
 import { buildPlayerRegistry } from '../domain/playerRegistry'
+import {
+  buildLeagueAchievementCatalog,
+  buildRotatingAchievementCatalog,
+  buildTournamentPenaltyCatalog,
+} from '../domain/achievementCatalogs'
 import type { AppWorkspaceRepository } from './appWorkspaceRepository'
 
 export const APP_WORKSPACE_STORAGE_KEY = 'area52.commander-manager.workspace'
-export const APP_WORKSPACE_STORAGE_VERSION = 6
+export const APP_WORKSPACE_STORAGE_VERSION = 8
 
 interface StorageLike {
   getItem(key: string): string | null
@@ -45,7 +50,8 @@ function normalizeNavigation(value: unknown): AppNavigationState {
 }
 
 export function serializeAppWorkspace(workspace: AppWorkspace): string {
-  return JSON.stringify({ version: APP_WORKSPACE_STORAGE_VERSION, workspace })
+  const { legacyLeagueCatalogNeedsRebuild: _legacyMarker, ...persistableWorkspace } = workspace
+  return JSON.stringify({ version: APP_WORKSPACE_STORAGE_VERSION, workspace: persistableWorkspace })
 }
 
 export function deserializeAppWorkspace(serialized: string): AppWorkspace | null {
@@ -55,7 +61,7 @@ export function deserializeAppWorkspace(serialized: string): AppWorkspace | null
       workspace?: Partial<AppWorkspace>
     }
     if (
-      ![1, 2, 3, 4, 5, APP_WORKSPACE_STORAGE_VERSION].includes(snapshot.version ?? -1) ||
+      ![1, 2, 3, 4, 5, 6, 7, APP_WORKSPACE_STORAGE_VERSION].includes(snapshot.version ?? -1) ||
       !snapshot.workspace ||
       !Array.isArray(snapshot.workspace.tournaments)
     ) {
@@ -67,6 +73,19 @@ export function deserializeAppWorkspace(serialized: string): AppWorkspace | null
     return {
       tournaments,
       playerRegistry: buildPlayerRegistry(tournaments, snapshot.workspace.playerRegistry ?? []),
+      rotatingAchievementCatalog: buildRotatingAchievementCatalog(
+        snapshot.workspace.rotatingAchievementCatalog,
+        tournaments,
+      ),
+      leagueAchievementCatalog: buildLeagueAchievementCatalog(
+        snapshot.workspace.leagueAchievementCatalog,
+      ),
+      ...(!Array.isArray(snapshot.workspace.leagueAchievementCatalog)
+        ? { legacyLeagueCatalogNeedsRebuild: true }
+        : {}),
+      tournamentPenaltyCatalog: buildTournamentPenaltyCatalog(
+        snapshot.workspace.tournamentPenaltyCatalog,
+      ),
       navigation: normalizeNavigation(snapshot.workspace.navigation),
     }
   } catch {

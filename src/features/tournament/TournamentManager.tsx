@@ -21,6 +21,7 @@ import {
   resolveTournamentFinancialReview,
 } from '../../domain/competitive'
 import { buildTournamentFinancialDifferences } from '../../domain/league'
+import { applyTournamentPenalty, voidTournamentPenalty } from '../../domain/tournamentPenalties'
 import {
   beginRoundCorrection,
   beginTableCorrection,
@@ -38,6 +39,8 @@ import {
 import type {
   LeaguePeriod,
   LeaguePrizeLedger,
+  RotatingAchievementDefinition,
+  TournamentPenaltyDefinition,
   Tournament,
   TournamentConfigInput,
 } from '../../domain/tournament'
@@ -55,11 +58,16 @@ interface TournamentManagerProps {
   tournament: Tournament
   leaguePeriods: LeaguePeriod[]
   ledger: LeaguePrizeLedger
+  rotatingAchievementCatalog: RotatingAchievementDefinition[]
+  tournamentPenaltyCatalog: TournamentPenaltyDefinition[]
+  tournaments: Tournament[]
   storageStatus: 'saving' | 'saved' | 'error'
   activeView: AppView
   onActiveViewChange: (view: AppView) => void
   onTournamentChange: (tournament: Tournament) => void
+  onDeleteTournament: () => string | null
   onHistoricalCorrection: (leaguePeriodId: string) => void
+  onLeaguePenaltyChange: (leaguePeriodId: string, financialImpact: boolean) => void
   onApplyDateCreditCorrections: () => string | null
   resolvePlayerKey: (name: string) => string
   onExit: () => void
@@ -73,11 +81,16 @@ export function TournamentManager({
   tournament,
   leaguePeriods,
   ledger,
+  rotatingAchievementCatalog,
+  tournamentPenaltyCatalog,
+  tournaments,
   storageStatus,
   activeView,
   onActiveViewChange,
   onTournamentChange,
+  onDeleteTournament,
   onHistoricalCorrection,
+  onLeaguePenaltyChange,
   onApplyDateCreditCorrections,
   resolvePlayerKey,
   onExit,
@@ -114,6 +127,22 @@ export function TournamentManager({
 
   const currentRound = getCurrentRound(tournament)
   const selectedLeague = leaguePeriods.find((period) => period.id === tournament.leaguePeriodId)
+  const changePenalty = (change: (current: Tournament) => Tournament): string | null => {
+    try {
+      const next = change(tournament)
+      onTournamentChange(next)
+      if (tournament.leaguePeriodId) {
+        onLeaguePenaltyChange(
+          tournament.leaguePeriodId,
+          next.financialReviewRequired && !tournament.financialReviewRequired,
+        )
+      }
+      return null
+    } catch (error) {
+      return messageFromError(error)
+    }
+  }
+  const penaltyContext = { ledger, leaguePeriod: selectedLeague, tournaments }
   const prizeSummary = calculateTournamentPrizeSummary(tournament, selectedLeague)
   const financialDifferences = buildTournamentFinancialDifferences(
     tournament,
@@ -205,13 +234,28 @@ export function TournamentManager({
           />
         )}
         {activeView === 'standing' && (
-          <LeaderboardView tournament={tournament} leaguePeriod={selectedLeague} contributions={ledger.contributions} />
+          <LeaderboardView
+            tournament={tournament}
+            leaguePeriod={selectedLeague}
+            contributions={ledger.contributions}
+            penaltyCatalog={tournamentPenaltyCatalog}
+            onApplyPenalty={(playerKey, definitionId) => changePenalty((current) => {
+              const definition = tournamentPenaltyCatalog.find((item) => item.id === definitionId)
+              if (!definition) throw new Error('La penalización seleccionada ya no está disponible.')
+              return applyTournamentPenalty(current, playerKey, definition, penaltyContext)
+            })}
+            onVoidPenalty={(movementId) => changePenalty((current) =>
+              voidTournamentPenalty(current, movementId, penaltyContext))}
+          />
         )}
         {activeView === 'settings' && (
           <SettingsView
             tournament={tournament}
             leaguePeriods={leaguePeriods}
             contributions={ledger.contributions}
+            rotatingCatalog={rotatingAchievementCatalog}
+            ledger={ledger}
+            onDelete={onDeleteTournament}
             error={feedback}
             onUpdate={(config: TournamentConfigInput, options: TournamentConfigurationUpdateOptions) => {
               try {

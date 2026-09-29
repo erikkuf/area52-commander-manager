@@ -3,7 +3,9 @@ import {
   achievementConfigsEqual,
   cloneAchievementConfig,
   DEFAULT_ACHIEVEMENT_CONFIG,
+  normalizeRotatingAchievementSnapshots,
   recalculateTournamentAchievementPoints,
+  rotatingAchievementSnapshotsEqual,
   tournamentHasRecordedResults,
 } from './achievements'
 import { syncSetupPrizeParticipants } from './prizes'
@@ -12,7 +14,6 @@ import type {
   AchievementConfig,
   IdFactory,
   LeaguePeriod,
-  RotatingAchievementConfig,
   Round,
   Tournament,
   TournamentConfigInput,
@@ -30,13 +31,14 @@ function normalizedConfig(
     prizeMode === 'league_auto' && leaguePeriod
       ? leaguePeriod.defaultAchievementConfig
       : fallbackAchievementConfig
-  const rotatingAchievements: RotatingAchievementConfig[] = (
+  const rotatingAchievements = normalizeRotatingAchievementSnapshots(
     input.rotatingAchievements ?? [
       { id: 'rotating1', label: input.rotating1, points: 1 },
       { id: 'rotating2', label: input.rotating2, points: 1 },
       { id: 'rotating3', label: input.rotating3, points: 1 },
-    ]
-  ).map((achievement) => ({ ...achievement, label: achievement.label.trim() }))
+    ],
+    input.achievementConfig ?? inheritedAchievementConfig,
+  )
   const inheritedRotatingAchievements =
     prizeMode === 'league_auto' && leaguePeriod && !input.rotatingAchievements
       ? leaguePeriod.defaultRotatingAchievements
@@ -83,6 +85,7 @@ export function createTournament(
     prizeParticipantIds: [],
     participants: [],
     rounds: [],
+    penaltyMovements: [],
     ghostPairingAuthorized: false,
     financialReviewRequired: false,
     createdAt: now,
@@ -112,6 +115,7 @@ function roundContainsData(round: Round): boolean {
             result.rotating3 ||
             result.rotating4 ||
             result.rotating5 ||
+            Boolean(result.rotatingAchievementIds?.length) ||
             result.wonTable ||
             result.eliminations > 0 ||
             result.survived ||
@@ -189,8 +193,12 @@ export function updateTournamentConfiguration(
     tournament.achievementConfig,
     nextConfig.achievementConfig,
   )
+  const rotatingAchievementsChanged = !rotatingAchievementSnapshotsEqual(
+    tournament.rotatingAchievements,
+    nextConfig.rotatingAchievements,
+  )
   if (
-    achievementConfigChanged &&
+    (achievementConfigChanged || rotatingAchievementsChanged) &&
     tournamentHasRecordedResults(tournament) &&
     !options.recalculateResults
   ) {
@@ -219,7 +227,7 @@ export function updateTournamentConfiguration(
     updatedAt: new Date().toISOString(),
   }
 
-  if (achievementConfigChanged && options.recalculateResults) {
+  if ((achievementConfigChanged || rotatingAchievementsChanged) && options.recalculateResults) {
     updated = recalculateTournamentAchievementPoints(updated, nextConfig.achievementConfig)
     updated = { ...updated, administrativeStandingParticipantIds: undefined }
   }

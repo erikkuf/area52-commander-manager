@@ -2,15 +2,16 @@ import type { Tournament } from '../domain/tournament'
 import {
   cloneAchievementConfig,
   DEFAULT_ACHIEVEMENT_CONFIG,
-  DEFAULT_ROTATING_ACHIEVEMENTS,
   LEGACY_ACHIEVEMENT_CONFIG,
+  migratePlayerResultRotatingAchievements,
+  normalizeRotatingAchievementSnapshots,
   recalculateTournamentAchievementPoints,
 } from '../domain/achievements'
 import { createLocalPlayerKey } from '../domain/participants'
 import type { TournamentRepository } from './tournamentRepository'
 
 export const TOURNAMENT_STORAGE_KEY = 'area52.commander-manager.current-tournament'
-export const TOURNAMENT_STORAGE_VERSION = 9
+export const TOURNAMENT_STORAGE_VERSION = 11
 
 interface StorageLike {
   getItem(key: string): string | null
@@ -80,21 +81,27 @@ export function migrateTournament(tournament: Tournament): Tournament {
         }
       : cloneAchievementConfig(DEFAULT_ACHIEVEMENT_CONFIG)
 
+  const rotatingAchievements = normalizeRotatingAchievementSnapshots(
+    tournament.rotatingAchievements?.slice(0, 5) as never,
+    inferredAchievementConfig,
+  )
+  const penaltyMovements = tournament.penaltyMovements ?? []
+  if (!Array.isArray(penaltyMovements) || penaltyMovements.some((movement) =>
+    !Number.isInteger(movement.amount) || movement.amount >= 0 ||
+    movement.tournamentId !== tournament.id ||
+    (movement.status !== 'active' && movement.status !== 'void'),
+  )) {
+    throw new Error('El respaldo contiene una penalización de fecha inválida.')
+  }
+
   const migrateTable = (table: Tournament['rounds'][number]['tables'][number]) => ({
     ...table,
     editCount: table.editCount ?? 0,
-    results: table.results.map((result) => ({
-      ...result,
-      rotating4: result.rotating4 ?? false,
-      rotating5: result.rotating5 ?? false,
-    })),
+    results: table.results.map((result) =>
+      migratePlayerResultRotatingAchievements(result, rotatingAchievements)),
     savedResults: (
       table.savedResults ?? (table.status === 'saved' ? table.results : [])
-    ).map((result) => ({
-      ...result,
-      rotating4: result.rotating4 ?? false,
-      rotating5: result.rotating5 ?? false,
-    })),
+    ).map((result) => migratePlayerResultRotatingAchievements(result, rotatingAchievements)),
   })
 
   const migrated: Tournament = {
@@ -124,12 +131,11 @@ export function migrateTournament(tournament: Tournament): Tournament {
       tournament.prizePlayerCount ??
       tournament.participants.filter((participant) => !(participant.isGhost ?? false)).length,
     achievementConfig: inferredAchievementConfig,
-    rotatingAchievements:
-      tournament.rotatingAchievements?.length > 0
-        ? tournament.rotatingAchievements.slice(0, 5).map((achievement) => ({ ...achievement }))
-        : DEFAULT_ROTATING_ACHIEVEMENTS.map((achievement) => ({ ...achievement })),
-    administrativeStandingParticipantIds:
-      tournament.administrativeStandingParticipantIds,
+    rotatingAchievements,
+    penaltyMovements: penaltyMovements.map((movement) => ({ ...movement })),
+    ...(tournament.administrativeStandingParticipantIds
+      ? { administrativeStandingParticipantIds: tournament.administrativeStandingParticipantIds }
+      : {}),
     ghostPairingAuthorized,
     financialReviewRequired:
       prizeMode === 'none' ? false : tournament.financialReviewRequired ?? false,
@@ -154,10 +160,14 @@ export function migrateTournament(tournament: Tournament): Tournament {
       return {
         ...round,
         isCorrectionMode,
-        correctionBaseline:
-          isCorrectionMode ? storedBaseline ?? repairedBaseline : undefined,
-        correctionStartedAt:
-          isCorrectionMode ? round.correctionStartedAt ?? round.lastEditedAt : undefined,
+        ...(isCorrectionMode
+          ? {
+              correctionBaseline: storedBaseline ?? repairedBaseline,
+              ...(round.correctionStartedAt ?? round.lastEditedAt
+                ? { correctionStartedAt: round.correctionStartedAt ?? round.lastEditedAt }
+                : {}),
+            }
+          : {}),
         wasEditedAfterFinish: round.wasEditedAfterFinish ?? false,
         wasManuallyAdjusted: round.wasManuallyAdjusted ?? false,
         tables,
@@ -176,7 +186,7 @@ export function deserializeTournament(serialized: string): Tournament | null {
   try {
     const snapshot = JSON.parse(serialized) as Partial<TournamentSnapshot>
     if (
-      ![1, 2, 3, 4, 5, 6, 7, 8, TOURNAMENT_STORAGE_VERSION].includes(snapshot.version ?? -1) ||
+      ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, TOURNAMENT_STORAGE_VERSION].includes(snapshot.version ?? -1) ||
       !isTournament(snapshot.tournament)
     ) {
       return null

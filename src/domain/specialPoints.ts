@@ -8,6 +8,14 @@ import type {
 } from './tournament'
 import { createId } from '../utils/id'
 
+export interface SpecialPointMovementDraft {
+  amount: number
+  reason?: string
+  sourceDefinitionId?: string
+  name: string
+  description?: string
+}
+
 export function calculateSpecialLeaguePoints(
   movements: SpecialPointMovement[],
   leaguePeriodId: string,
@@ -31,6 +39,11 @@ export function registerSpecialPointMovement(
   reason = '',
   idFactory: IdFactory = createId,
   now = new Date().toISOString(),
+  snapshot?: {
+    sourceDefinitionId?: string
+    name?: string
+    description?: string
+  },
 ): SpecialPointMovement[] {
   if (!leaguePeriodId || !playerKey) {
     throw new DomainError('La liga y el jugador son obligatorios.')
@@ -48,11 +61,24 @@ export function registerSpecialPointMovement(
       leaguePeriodId,
       playerKey,
       amount,
+      sourceDefinitionId: snapshot?.sourceDefinitionId,
+      name: snapshot?.name?.trim() || reason.trim() || 'Ajuste personalizado',
+      description: snapshot?.description?.trim() || undefined,
       reason: reason.trim() || undefined,
       createdAt: now,
       status: 'active',
     },
   ]
+}
+
+export function migrateSpecialPointMovementSnapshot(
+  movement: SpecialPointMovement,
+): SpecialPointMovement {
+  return {
+    ...movement,
+    name: movement.name?.trim() || movement.reason?.trim() || 'Ajuste personalizado',
+    description: movement.description?.trim() || undefined,
+  }
 }
 
 export function voidSpecialPointMovement(
@@ -109,6 +135,8 @@ export function migrateLegacySpecialPointMovements(
         leaguePeriodId: leaguePeriod.id,
         playerKey,
         amount: value.amount,
+        name: 'Migración de puntos especiales históricos',
+        description: `Puntos reconstruidos para ${value.name}.`,
         reason: `Migración de puntos especiales históricos · ${value.name}`,
         createdAt: leaguePeriod.updatedAt,
         status: 'active',

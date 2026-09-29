@@ -13,6 +13,69 @@ export type RotatingAchievementId =
   | 'rotating4'
   | 'rotating5'
 
+export interface RotatingAchievementDefinition {
+  id: string
+  name: string
+  description: string
+  points: number
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface LeagueAchievementDefinition {
+  id: string
+  name: string
+  description: string
+  points: number
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TournamentPenaltyDefinition {
+  id: string
+  name: string
+  description: string
+  points: number // entero negativo
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TournamentPenaltyMovement {
+  id: string
+  tournamentId: string
+  playerKey: string
+  sourceDefinitionId?: string
+  name: string
+  description?: string
+  amount: number // entero negativo
+  createdAt: string
+  status: 'active' | 'void'
+  voidedAt?: string
+}
+
+export interface TournamentRotatingAchievementSnapshot {
+  id: string
+  sourceDefinitionId?: string
+  name: string
+  description: string
+  points: number
+  enabled: boolean
+  legacySlot?: RotatingAchievementId
+}
+
+/** Entrada antigua aceptada exclusivamente por migraciones y formularios legacy. */
+export interface LegacyRotatingAchievementConfig {
+  id: RotatingAchievementId
+  label: string
+  points: number
+}
+
+/** @deprecated Usa TournamentRotatingAchievementSnapshot. */
+export type RotatingAchievementConfig = TournamentRotatingAchievementSnapshot
+
 export interface Participant {
   id: string
   playerKey: string
@@ -23,6 +86,8 @@ export interface Participant {
 
 export interface PlayerResult {
   participantId: string
+  rotatingAchievementIds?: string[]
+  /** Campos legacy conservados para leer respaldos y hechos históricos. */
   rotating1: boolean
   rotating2: boolean
   rotating3: boolean
@@ -61,18 +126,13 @@ export interface Round {
   lastEditedAt?: string
 }
 
-export interface RotatingAchievementConfig {
-  id: RotatingAchievementId
-  label: string
-  points: number
-}
-
 export interface AchievementRule {
   enabled: boolean
   points: number
 }
 
 export interface AchievementConfig {
+  /** Reglas rotativas legacy. Los snapshots dinámicos son la fuente vigente. */
   rotating1: AchievementRule
   rotating2: AchievementRule
   rotating3: AchievementRule
@@ -104,7 +164,7 @@ export interface LeaguePeriod {
   datePrizePercentages: number[]
   monthlyPrizePercentages: number[]
   defaultAchievementConfig: AchievementConfig
-  defaultRotatingAchievements: RotatingAchievementConfig[]
+  defaultRotatingAchievements: TournamentRotatingAchievementSnapshot[]
   createdAt: string
   updatedAt: string
   finishedAt?: string
@@ -139,11 +199,19 @@ export interface LeaguePoolContribution {
   finalizedAt?: string
 }
 
+export interface ChampionPhotoCrop {
+  x: number // 0..1, posición horizontal dentro del excedente de imagen
+  y: number // 0..1, posición vertical dentro del excedente de imagen
+  zoom: number // 1..4 respecto al tamaño mínimo que cubre el marco
+}
+
 export interface ChampionPhotoReference {
   id: string
   fileName: string
   mimeType: string
   storageKey: string
+  cardCrop?: ChampionPhotoCrop
+  detailCrop?: ChampionPhotoCrop
 }
 
 export interface LeagueChampionSnapshot {
@@ -183,6 +251,9 @@ export interface SpecialPointMovement {
   leaguePeriodId: string
   playerKey: string
   amount: number
+  sourceDefinitionId?: string
+  name: string
+  description?: string
   reason?: string
   createdAt: string
   status: SpecialPointMovementStatus
@@ -224,11 +295,12 @@ export interface Tournament {
   leaguePeriodId?: string
   prizePlayerCount: number
   prizeParticipantIds: string[]
-  rotatingAchievements: RotatingAchievementConfig[]
+  rotatingAchievements: TournamentRotatingAchievementSnapshot[]
   achievementConfig: AchievementConfig
   dateCreditConfig: CreditPrizeConfig
   participants: Participant[]
   rounds: Round[]
+  penaltyMovements: TournamentPenaltyMovement[]
   administrativeStandingParticipantIds?: string[]
   ghostPairingAuthorized: boolean
   financialReviewRequired: boolean
@@ -246,7 +318,7 @@ export interface TournamentConfigInput {
   rotating1: string
   rotating2: string
   rotating3: string
-  rotatingAchievements?: RotatingAchievementConfig[]
+  rotatingAchievements?: Array<TournamentRotatingAchievementSnapshot | LegacyRotatingAchievementConfig>
   prizePool: number
   percentagesByPosition: number[]
   prizeMode?: PrizeMode

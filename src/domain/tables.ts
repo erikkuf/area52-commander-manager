@@ -119,6 +119,7 @@ export function shuffleParticipants(
 export function createEmptyPlayerResult(participantId: string): PlayerResult {
   return {
     participantId,
+    rotatingAchievementIds: [],
     rotating1: false,
     rotating2: false,
     rotating3: false,

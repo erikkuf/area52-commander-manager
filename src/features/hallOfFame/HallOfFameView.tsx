@@ -13,6 +13,7 @@ import {
 } from '../../domain/league'
 import type {
   ChampionPhotoReference,
+  ChampionPhotoCrop,
   LeagueChampionSnapshot,
   LeaguePrizeLedger,
   Tournament,
@@ -22,6 +23,10 @@ import {
   type ChampionPhotoFile,
   type ChampionPhotoStorage,
 } from '../../services/championPhotoStorage'
+import { CroppedChampionPhoto } from '../../components/CroppedChampionPhoto'
+import { getChampionPhotoCrop, withChampionPhotoCrops, type ChampionPhotoView } from '../../domain/championPhotoCrop'
+import { ChampionPhotoCropEditor } from './ChampionPhotoCropEditor'
+import { useChampionPhotoPreview, usePhotoFilePreview } from './useChampionPhotoPreview'
 
 interface HallOfFameViewProps {
   tournaments: Tournament[]
@@ -41,37 +46,15 @@ function ChampionPhoto({
   reference,
   photoStorage,
   alt,
+  view,
 }: {
   reference?: ChampionPhotoReference
   photoStorage: ChampionPhotoStorage
   alt: string
+  view: ChampionPhotoView
 }) {
-  const [preview, setPreview] = useState<string | null>(null)
-
-  useEffect(() => {
-    let active = true
-    let objectUrl: string | null = null
-    if (!reference) {
-      setPreview(null)
-      return () => { active = false }
-    }
-    photoStorage.getPreview(reference).then((url) => {
-      if (!active) {
-        if (url?.startsWith('blob:')) URL.revokeObjectURL(url)
-        return
-      }
-      objectUrl = url
-      setPreview(url)
-    }).catch(() => setPreview(null))
-    return () => {
-      active = false
-      if (objectUrl?.startsWith('blob:')) URL.revokeObjectURL(objectUrl)
-    }
-  }, [photoStorage, reference])
-
-  return preview
-    ? <img className="champion-photo" src={preview} alt={alt} />
-    : <div className="champion-photo champion-photo--placeholder" aria-label="Campeón sin foto"><span>1</span><small>CAMPEÓN</small></div>
+  const preview = useChampionPhotoPreview(reference, photoStorage)
+  return <CroppedChampionPhoto src={preview} alt={alt} view={view} crop={view === 'card' ? reference?.cardCrop : reference?.detailCrop} />
 }
 
 export function HallOfFameView({
@@ -103,7 +86,18 @@ export function HallOfFameView({
   const [deckName, setDeckName] = useState('')
   const [deckUrl, setDeckUrl] = useState('')
   const [photoFile, setPhotoFile] = useState<ChampionPhotoFile | null>(null)
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [cardCrop, setCardCrop] = useState(() => getChampionPhotoCrop())
+  const [detailCrop, setDetailCrop] = useState(() => getChampionPhotoCrop())
+  const [cropSession, setCropSession] = useState<{
+    file: ChampionPhotoFile | null
+    card: ChampionPhotoCrop
+    detail: ChampionPhotoCrop
+  } | null>(null)
+  const [saving, setSaving] = useState(false)
+  const originalPreview = useChampionPhotoPreview(editSnapshot?.championPhoto, photoStorage)
+  const photoPreview = usePhotoFilePreview(photoFile)
+  const pendingPreview = usePhotoFilePreview(cropSession?.file)
+  const cropPreview = cropSession?.file ? pendingPreview : photoPreview ?? originalPreview
   const [removePhoto, setRemovePhoto] = useState(false)
   const [feedback, setFeedback] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -114,7 +108,9 @@ export function HallOfFameView({
     setDeckName(snapshot.deckName ?? '')
     setDeckUrl(snapshot.deckUrl ?? '')
     setPhotoFile(null)
-    setPhotoPreview(null)
+    setCardCrop(getChampionPhotoCrop(snapshot.championPhoto?.cardCrop))
+    setDetailCrop(getChampionPhotoCrop(snapshot.championPhoto?.detailCrop))
+    setCropSession(null)
     setRemovePhoto(false)
     setError(null)
   }
@@ -122,7 +118,7 @@ export function HallOfFameView({
   const closeEditor = () => {
     setEditSnapshot(null)
     setPhotoFile(null)
-    setPhotoPreview(null)
+    setCropSession(null)
     setRemovePhoto(false)
     setError(null)
   }
@@ -136,28 +132,21 @@ export function HallOfFameView({
     onInitialEditHandled()
   }, [initialEditLeaguePeriodId, ledger.championSnapshots, onInitialEditHandled])
 
-  useEffect(() => () => {
-    if (photoPreview?.startsWith('blob:')) URL.revokeObjectURL(photoPreview)
-  }, [photoPreview])
-
   const selectPhoto = (file?: File) => {
     if (!file) return
     try {
       validateChampionPhotoFile(file)
-      setPhotoFile(file)
-      setRemovePhoto(false)
       setError(null)
-      setPhotoPreview(URL.createObjectURL(file))
+      setCropSession({ file, card: getChampionPhotoCrop(), detail: getChampionPhotoCrop() })
     } catch (photoError) {
-      setPhotoFile(null)
-      setPhotoPreview(null)
       setError(messageFromError(photoError))
     }
   }
 
   const saveRecord = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!editSnapshot) return
+    if (!editSnapshot || saving) return
+    setSaving(true)
     try {
       let championPhoto = editSnapshot.championPhoto
       if (photoFile) {
@@ -166,6 +155,7 @@ export function HallOfFameView({
         await photoStorage.remove(championPhoto)
         championPhoto = undefined
       }
+      if (championPhoto) championPhoto = withChampionPhotoCrops(championPhoto, cardCrop, detailCrop)
       onLedgerChange(updateChampionSnapshotMetadata(
         ledger,
         editSnapshot.id,
@@ -176,6 +166,8 @@ export function HallOfFameView({
       setError(null)
     } catch (saveError) {
       setError(messageFromError(saveError))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -230,7 +222,7 @@ export function HallOfFameView({
         <div>
           <p className="section-kicker">Archivo de campeones</p>
           <h1 id="hall-of-fame-title">Hall of Fame</h1>
-          <p>Los campeones oficiales se conservan como registros históricos independientes del Leaderboard actual.</p>
+          <p>Aquí quedan inmortalizados los campeones que marcaron cada temporada.</p>
         </div>
       </div>
 
@@ -276,7 +268,7 @@ export function HallOfFameView({
             return (
               <article className="champion-card" key={snapshot.id}>
                 <div className="champion-card__media">
-                  <ChampionPhoto reference={snapshot.championPhoto} photoStorage={photoStorage} alt={`Foto de ${snapshot.playerName}`} />
+                  <ChampionPhoto view="card" reference={snapshot.championPhoto} photoStorage={photoStorage} alt={`Foto de ${snapshot.playerName}`} />
                   <span className="champion-rank">#1</span>
                 </div>
                 <div className="champion-card__content">
@@ -325,7 +317,7 @@ export function HallOfFameView({
           <button className="modal-backdrop" type="button" aria-label="Cerrar" onClick={() => setDetailSnapshot(null)} />
           <section className="swap-modal champion-detail-modal">
             <div className="modal-header"><div><p className="section-kicker">Campeón oficial</p><h2 id="champion-detail-title">{detailSnapshot.playerName}</h2></div><button className="drawer-close" type="button" onClick={() => setDetailSnapshot(null)}>×</button></div>
-            <ChampionPhoto reference={detailSnapshot.championPhoto} photoStorage={photoStorage} alt={`Foto de ${detailSnapshot.playerName}`} />
+            <ChampionPhoto view="detail" reference={detailSnapshot.championPhoto} photoStorage={photoStorage} alt={`Foto de ${detailSnapshot.playerName}`} />
             <p className="modal-copy">{detailSnapshot.leagueName}</p>
             <dl className="champion-detail-stats">
               <div><dt>Puntos de liga</dt><dd>{detailSnapshot.leaguePoints}</dd></div>
@@ -343,24 +335,45 @@ export function HallOfFameView({
         </div>
       )}
 
-      {editSnapshot && (
+      {editSnapshot && !cropSession && (
         <div className="modal-layer" role="dialog" aria-modal="true" aria-labelledby="edit-champion-title">
-          <button className="modal-backdrop" type="button" aria-label="Cerrar" onClick={closeEditor} />
+          <button className="modal-backdrop" type="button" aria-label="Cerrar" disabled={saving} onClick={closeEditor} />
           <form className="swap-modal champion-edit-modal" onSubmit={saveRecord}>
-            <div className="modal-header"><div><p className="section-kicker">Metadata histórica</p><h2 id="edit-champion-title">Editar · {editSnapshot.playerName}</h2></div><button className="drawer-close" type="button" aria-label="Cerrar editor" onClick={closeEditor}>×</button></div>
+            <div className="modal-header"><div><p className="section-kicker">Metadata histórica</p><h2 id="edit-champion-title">Editar · {editSnapshot.playerName}</h2></div><button className="drawer-close" type="button" disabled={saving} aria-label="Cerrar editor" onClick={closeEditor}>×</button></div>
             <div className="champion-photo-editor">
-              {photoPreview ? <img className="champion-photo" src={photoPreview} alt="Vista previa de la nueva foto" /> : <ChampionPhoto reference={removePhoto ? undefined : editSnapshot.championPhoto} photoStorage={photoStorage} alt={`Foto de ${editSnapshot.playerName}`} />}
-              <div><label className="secondary-button champion-file-button">{editSnapshot.championPhoto ? 'Reemplazar foto' : 'Subir foto'}<input accept="image/jpeg,image/png,image/webp" type="file" onChange={(event) => { selectPhoto(event.target.files?.[0]); event.target.value = '' }} /></label>{editSnapshot.championPhoto && !removePhoto && !photoFile && <button className="danger-outline-button" type="button" onClick={() => setRemovePhoto(true)}>Eliminar foto</button>}{removePhoto && <button className="secondary-button" type="button" onClick={() => setRemovePhoto(false)}>Conservar foto</button>}<small>JPEG, PNG o WebP · máximo 5 MB</small></div>
+              <CroppedChampionPhoto view="card" crop={cardCrop} src={removePhoto ? null : photoPreview ?? originalPreview} alt={`Foto de ${editSnapshot.playerName}`} />
+              <div>
+                <label className="secondary-button champion-file-button">{editSnapshot.championPhoto ? 'Reemplazar foto' : 'Subir foto'}<input disabled={saving} accept="image/jpeg,image/png,image/webp" type="file" onChange={(event) => { selectPhoto(event.target.files?.[0]); event.target.value = '' }} /></label>
+                {!removePhoto && (photoPreview || originalPreview) && <button className="secondary-button" disabled={saving} type="button" onClick={() => setCropSession({ file: null, card: cardCrop, detail: detailCrop })}>Ajustar foto</button>}
+                {editSnapshot.championPhoto && !removePhoto && !photoFile && <button className="danger-outline-button" disabled={saving} type="button" onClick={() => setRemovePhoto(true)}>Eliminar foto</button>}
+                {removePhoto && <button className="secondary-button" disabled={saving} type="button" onClick={() => setRemovePhoto(false)}>Conservar foto</button>}
+                <small>JPEG, PNG o WebP · máximo 5 MB</small>
+                {editSnapshot.championPhoto && !originalPreview && !photoFile && <small>Si el archivo no está disponible en este navegador, vuelve a subirlo.</small>}
+              </div>
             </div>
             <label className="field"><span>Comandante</span><input value={commanderName} onChange={(event) => setCommanderName(event.target.value)} placeholder="Ej. Muldrotha, the Gravetide" /></label>
             <label className="field"><span>Nombre del mazo</span><input value={deckName} onChange={(event) => setDeckName(event.target.value)} placeholder="Opcional" /></label>
             <label className="field"><span>Decklist</span><input type="url" value={deckUrl} onChange={(event) => setDeckUrl(event.target.value)} placeholder="https://…" /></label>
             {error && <div className="form-message form-message--error">{error}</div>}
             <p className="field-help">Estos campos no modifican resultados, Leaderboard ni movimientos de crédito.</p>
-            <div className="modal-actions"><button className="secondary-button" type="button" onClick={closeEditor}>Cancelar</button><button className="primary-button" type="submit">Guardar registro</button></div>
+            <div className="modal-actions"><button className="secondary-button" disabled={saving} type="button" onClick={closeEditor}>Cancelar</button><button className="primary-button" disabled={saving} type="submit">{saving ? 'Guardando…' : 'Guardar registro'}</button></div>
           </form>
         </div>
       )}
+
+      {cropSession && (cropPreview ? <ChampionPhotoCropEditor
+        src={cropPreview}
+        cardCrop={cropSession.card}
+        detailCrop={cropSession.detail}
+        onCancel={() => setCropSession(null)}
+        onSave={(card, detail) => {
+          if (cropSession.file) setPhotoFile(cropSession.file)
+          setCardCrop(card)
+          setDetailCrop(detail)
+          setRemovePhoto(false)
+          setCropSession(null)
+        }}
+      /> : <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Cargando foto"><section className="swap-modal"><p>Cargando foto…</p><button className="secondary-button" type="button" onClick={() => setCropSession(null)}>Cancelar</button></section></div>)}
 
       {officialUpdate && (() => {
         const period = ledger.leaguePeriods.find((item) => item.id === officialUpdate.leaguePeriodId)

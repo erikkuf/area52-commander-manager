@@ -13,7 +13,13 @@ import {
   calculatePrizeDistribution,
   calculateTournamentPrizeSummary,
 } from '../../domain/prizes'
-import type { LeaguePeriod, LeaguePrizeLedger, Tournament } from '../../domain/tournament'
+import type {
+  LeagueAchievementDefinition,
+  LeaguePeriod,
+  LeaguePrizeLedger,
+  Tournament,
+} from '../../domain/tournament'
+import type { SpecialPointMovementDraft } from '../../domain/specialPoints'
 import { buildLeagueReconciliation } from '../../domain/reconciliation'
 import {
   buildCreditUsageImportPreview,
@@ -28,6 +34,7 @@ interface LeagueDetailViewProps {
   leaguePeriod: LeaguePeriod
   tournaments: Tournament[]
   ledger: LeaguePrizeLedger
+  leagueAchievementCatalog: LeagueAchievementDefinition[]
   playerRegistry: PlayerIdentity[]
   activeTab: LeagueDetailTab
   onTabChange: (tab: LeagueDetailTab) => void
@@ -46,7 +53,7 @@ interface LeagueDetailViewProps {
     kind: 'usage' | 'positive_adjustment' | 'negative_adjustment',
   ) => string | null
   onVoidCreditMovement: (movementId: string) => string | null
-  onRegisterSpecialPoint: (playerKey: string, amount: number, reason: string) => string | null
+  onRegisterSpecialPoint: (playerKey: string, movement: SpecialPointMovementDraft) => string | null
   onVoidSpecialPoint: (movementId: string) => string | null
   onOpenChampionEditor: () => void
 }
@@ -113,6 +120,7 @@ export function LeagueDetailView({
   leaguePeriod,
   tournaments,
   ledger,
+  leagueAchievementCatalog,
   playerRegistry,
   activeTab,
   onTabChange,
@@ -143,6 +151,9 @@ export function LeagueDetailView({
   const [specialQuantity, setSpecialQuantity] = useState(1)
   const [specialDirection, setSpecialDirection] = useState<1 | -1>(1)
   const [specialReason, setSpecialReason] = useState('')
+  const [specialDefinitionId, setSpecialDefinitionId] = useState('custom')
+  const [specialCustomName, setSpecialCustomName] = useState('')
+  const [specialDescription, setSpecialDescription] = useState('')
   const [finishedSpecialAdministration, setFinishedSpecialAdministration] = useState(false)
   const [showReopenConfirmation, setShowReopenConfirmation] = useState(false)
   const [showFinancialReview, setShowFinancialReview] = useState(false)
@@ -160,6 +171,9 @@ export function LeagueDetailView({
   const currentSpecialPlayer = specialPlayer
     ? standings.find((entry) => entry.playerKey === specialPlayer.playerKey) ?? specialPlayer
     : null
+  const selectedSpecialDefinition = leagueAchievementCatalog.find(
+    (definition) => definition.id === specialDefinitionId && definition.active,
+  )
   const pools = calculateLeaguePoolSummary(ledger.contributions, leaguePeriod.id)
   const finalPool = leaguePeriod.finalizedMonthlyPool ?? pools.monthlyFinalizedPool
   const readyToFinish = dates.length > 0 && dates.every((date) => date.status === 'finished')
@@ -210,17 +224,29 @@ export function LeagueDetailView({
   const submitSpecialPoints = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!specialPlayer) return
-    const error = onRegisterSpecialPoint(
-      specialPlayer.playerKey,
-      specialQuantity * specialDirection,
-      specialReason,
-    )
+    const movement: SpecialPointMovementDraft = selectedSpecialDefinition
+      ? {
+          sourceDefinitionId: selectedSpecialDefinition.id,
+          name: selectedSpecialDefinition.name,
+          description: selectedSpecialDefinition.description,
+          amount: selectedSpecialDefinition.points,
+          reason: specialReason,
+        }
+      : {
+          name: specialCustomName.trim() || specialReason.trim() || 'Ajuste personalizado',
+          description: specialDescription,
+          amount: specialQuantity * specialDirection,
+          reason: specialReason,
+        }
+    const error = onRegisterSpecialPoint(specialPlayer.playerKey, movement)
     if (error) {
       setModalError(error)
       return
     }
     setSpecialQuantity(1)
     setSpecialReason('')
+    setSpecialCustomName('')
+    setSpecialDescription('')
     setModalError(null)
   }
 
@@ -331,6 +357,9 @@ export function LeagueDetailView({
             setSpecialQuantity(1)
             setSpecialDirection(1)
             setSpecialReason('')
+            setSpecialDefinitionId('custom')
+            setSpecialCustomName('')
+            setSpecialDescription('')
             setFinishedSpecialAdministration(false)
             setModalError(null)
           }}
@@ -472,17 +501,19 @@ export function LeagueDetailView({
             ) : (
               <>
                 {leaguePeriod.status === 'finished' && <div className="form-message form-message--error">Estás modificando una liga finalizada. Esto puede cambiar el Leaderboard histórico y marcará la liga para revisión.</div>}
-                <h3>Registrar puntos especiales</h3>
-                <div className="choice-buttons choice-buttons--compact" role="group" aria-label="Tipo de ajuste de puntos">
-                  <button type="button" className={specialDirection === 1 ? 'is-selected' : ''} onClick={() => setSpecialDirection(1)}>Sumar</button>
-                  <button type="button" className={specialDirection === -1 ? 'is-selected' : ''} onClick={() => setSpecialDirection(-1)}>Corrección negativa</button>
-                </div>
-                <div className="special-quantity-control" aria-label={`${specialQuantity} puntos`}>
-                  <button type="button" disabled={specialQuantity <= 1} onClick={() => setSpecialQuantity((current) => Math.max(1, current - 1))}>−</button>
-                  <strong>{specialDirection === -1 ? '−' : '+'}{specialQuantity}</strong>
-                  <button type="button" onClick={() => setSpecialQuantity((current) => current + 1)}>+</button>
-                </div>
-                <label className="field"><span>Motivo</span><input value={specialReason} placeholder="Ej. Actividad comunidad" onChange={(event) => setSpecialReason(event.target.value)} /></label>
+                <h3>Registrar logro o penalización de liga</h3>
+                <label className="field"><span>Definición</span><select value={specialDefinitionId} onChange={(event) => setSpecialDefinitionId(event.target.value)}><option value="custom">Otro / Personalizado</option>{leagueAchievementCatalog.filter((definition) => definition.active).map((definition) => <option key={definition.id} value={definition.id}>{definition.name} · {definition.points > 0 ? '+' : ''}{definition.points}</option>)}</select></label>
+                {selectedSpecialDefinition ? (
+                  <div className="achievement-definition-preview"><strong>{selectedSpecialDefinition.name} · {selectedSpecialDefinition.points > 0 ? '+' : ''}{selectedSpecialDefinition.points}</strong><p>{selectedSpecialDefinition.description || 'Sin descripción.'}</p></div>
+                ) : (
+                  <>
+                    <label className="field"><span>Nombre</span><input required value={specialCustomName} placeholder="Ej. Actividad comunidad" onChange={(event) => setSpecialCustomName(event.target.value)} /></label>
+                    <label className="field"><span>Descripción opcional</span><textarea value={specialDescription} onChange={(event) => setSpecialDescription(event.target.value)} /></label>
+                    <div className="choice-buttons choice-buttons--compact" role="group" aria-label="Tipo de ajuste de puntos"><button type="button" className={specialDirection === 1 ? 'is-selected' : ''} onClick={() => setSpecialDirection(1)}>Sumar</button><button type="button" className={specialDirection === -1 ? 'is-selected' : ''} onClick={() => setSpecialDirection(-1)}>Penalización</button></div>
+                    <div className="special-quantity-control" aria-label={`${specialQuantity} puntos`}><button type="button" disabled={specialQuantity <= 1} onClick={() => setSpecialQuantity((current) => Math.max(1, current - 1))}>−</button><strong>{specialDirection === -1 ? '−' : '+'}{specialQuantity}</strong><button type="button" onClick={() => setSpecialQuantity((current) => current + 1)}>+</button></div>
+                  </>
+                )}
+                <label className="field"><span>Nota / motivo opcional</span><input value={specialReason} onChange={(event) => setSpecialReason(event.target.value)} /></label>
                 <button className="primary-button" type="submit">Registrar</button>
               </>
             )}
@@ -496,7 +527,7 @@ export function LeagueDetailView({
                 .sort((first, second) => second.createdAt.localeCompare(first.createdAt))
                 .map((movement) => (
                   <div className={movement.status === 'void' ? 'is-void' : ''} key={movement.id}>
-                    <span>{movement.reason ?? 'Sin motivo'}<small>{movement.status === 'void' ? 'ANULADO' : new Date(movement.createdAt).toLocaleString('es-CL')}</small></span>
+                    <span>{movement.name ?? movement.reason ?? 'Ajuste personalizado'}<small>{movement.description}{movement.reason ? ` · ${movement.reason}` : ''} · {movement.status === 'void' ? 'ANULADO' : new Date(movement.createdAt).toLocaleString('es-CL')}</small></span>
                     <strong>{movement.amount > 0 ? '+' : ''}{movement.amount}</strong>
                     {movement.status === 'active' && (leaguePeriod.status === 'active' || finishedSpecialAdministration) && <button type="button" onClick={() => {
                       if (!window.confirm('¿Anular este movimiento? El registro se conservará en el historial.')) return

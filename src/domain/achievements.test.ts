@@ -38,7 +38,7 @@ describe('calculateAchievementPoints configurable', () => {
     const config = cloneAchievementConfig(DEFAULT_ACHIEVEMENT_CONFIG)
     config.win.points = 20
     config.rotating1.points = 0
-    expect(calculateAchievementCount(recordedFacts, config)).toBe(1)
+    expect(calculateAchievementCount(recordedFacts, config)).toBe(0)
     expect(calculateAchievementPoints(recordedFacts, config)).toBe(23)
   })
 

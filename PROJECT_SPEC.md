@@ -173,7 +173,7 @@ interface Tournament {
   prizePlayerCount: number;
   prizeParticipantIds: string[];
 
-  rotatingAchievements: RotatingAchievementConfig[];
+  rotatingAchievements: TournamentRotatingAchievementSnapshot[];
   achievementConfig: AchievementConfig; // snapshot propio del evento
 
   dateCreditConfig: CreditPrizeConfig;
@@ -181,6 +181,7 @@ interface Tournament {
 
   participants: Participant[];
   rounds: Round[];
+  penaltyMovements: TournamentPenaltyMovement[];
   administrativeStandingParticipantIds?: string[]; // solo desempates exactos resueltos
   ghostPairingAuthorized: boolean;
   financialReviewRequired: boolean;
@@ -265,26 +266,46 @@ interface CommanderTable {
 }
 ```
 
-### 6.5 RotatingAchievementConfig
+### 6.5 Catálogo y snapshot de logros rotativos
 
 ```ts
-interface RotatingAchievementConfig {
-  id: "rotating1" | "rotating2" | "rotating3" | "rotating4" | "rotating5";
-  label: string;
-  points: number; // default Alpha: 1
+interface RotatingAchievementDefinition {
+  id: string;
+  name: string;
+  description: string;
+  points: number; // entero distinto de cero; positivo=logro, negativo=penalización
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentRotatingAchievementSnapshot {
+  id: string;
+  sourceDefinitionId?: string;
+  name: string;
+  description: string;
+  points: number;
+  enabled: boolean;
+  legacySlot?: "rotating1" | "rotating2" | "rotating3" | "rotating4" | "rotating5";
 }
 ```
+
+El catálogo global no tiene un máximo de definiciones. Una liga o Tournament selecciona normalmente
+tres snapshots y puede agregar un cuarto y un quinto; nunca un sexto. El límite de cinco pertenece a
+la configuración del evento, no al modelo del catálogo. Editar o desactivar una definición global no
+modifica snapshots ni resultados existentes. `sourceDefinitionId` es solo trazabilidad.
+
+Las definiciones de cualquiera de los catálogos globales también pueden eliminarse con confirmación.
+La eliminación solo afecta futuras selecciones: los snapshots de fechas/ligas y los movimientos ya
+registrados conservan sus nombres, descripciones, valores e IDs de origen. Desactivar sigue siendo la
+alternativa reversible. Un catálogo persistido vacío no se reconstruye desde la historia al recargar.
 
 ### 6.6 PlayerResult
 
 ```ts
 interface PlayerResult {
   participantId: string;
-  rotating1: boolean;
-  rotating2: boolean;
-  rotating3: boolean;
-  rotating4?: boolean;
-  rotating5?: boolean;
+  rotatingAchievementIds: string[];
   wonTable: boolean;
   eliminations: number; // 0..3
   survived: boolean;
@@ -293,6 +314,9 @@ interface PlayerResult {
   specialLeaguePoints: number; // separate, manual/admin
 }
 ```
+
+Los booleanos `rotating1` a `rotating5` se aceptan únicamente al migrar respaldos antiguos. Toda
+escritura nueva usa IDs dinámicos y elimina duplicados.
 
 ### 6.7 CreditPrizeConfig
 
@@ -364,7 +388,7 @@ interface LeaguePeriod {
   datePrizePercentages: number[];
   monthlyPrizePercentages: number[];
   defaultAchievementConfig: AchievementConfig;
-  defaultRotatingAchievements: RotatingAchievementConfig[];
+  defaultRotatingAchievements: TournamentRotatingAchievementSnapshot[];
   finishedAt?: string;
   reviewRequired?: boolean;
   finalizedMonthlyPool?: number;
@@ -440,7 +464,7 @@ Campos:
 - Nombre.
 - Fecha.
 - Número de rondas.
-- Entre uno y cinco logros rotativos; los tres históricos conservan sus identificadores.
+- Tres logros rotativos seleccionados por defecto, con cuarto y quinto opcionales; nunca un sexto.
 - Tipo de evento: fecha de liga o torneo independiente.
 - Liga asociada cuando corresponda.
 - Torneo independiente: sin crédito o pozo manual + porcentajes.
@@ -584,9 +608,9 @@ reemplaza este mínimo competitivo.
 ### 9.1 Logros de cada partida
 Config/default Alpha:
 
-- Rotativo 1: booleano, +1 punto de logro.
-- Rotativo 2: booleano, +1.
-- Rotativo 3: booleano, +1.
+- Tres snapshots rotativos seleccionados inicialmente, cada uno con nombre, descripción y puntos
+  firmados; el staff puede agregar un cuarto y un quinto.
+- Una definición con puntos positivos es logro y una con puntos negativos es penalización.
 - Ganar la mesa: booleano, +3.
 - Eliminar oponente: contador 0..3, +1 por eliminación.
 - Sobrevivir: booleano, +1.
@@ -600,11 +624,6 @@ interface AchievementRule {
 }
 
 interface AchievementConfig {
-  rotating1: AchievementRule;
-  rotating2: AchievementRule;
-  rotating3: AchievementRule;
-  rotating4?: AchievementRule;
-  rotating5?: AchievementRule;
   win: AchievementRule;
   elimination: AchievementRule;
   survival: AchievementRule;
@@ -614,7 +633,8 @@ interface AchievementConfig {
 - `LeaguePeriod.defaultAchievementConfig` se copia al crear una nueva fecha.
 - `Tournament.achievementConfig` es un snapshot independiente.
 - Cambiar la liga no modifica fechas ya creadas.
-- Deshabilitar un logro no borra el hecho histórico registrado; solo deja de otorgar puntos bajo la configuración del torneo.
+- Los rotativos seleccionados, sus valores y disponibilidad viven en `Tournament.rotatingAchievements`.
+- Deshabilitar un snapshot no borra el ID histórico registrado; solo deja de otorgar puntos bajo la configuración del torneo.
 - Cambiar configuración con resultados exige confirmación y recálculo explícito de los valores derivados.
 
 ### 9.2 Cálculo
@@ -622,7 +642,7 @@ El staff nunca escribe manualmente el total de logros.
 
 ```ts
 achievementPoints =
-  suma de los puntos de los rotativos configurados (máximo 5) +
+  suma firmada de los snapshots rotativos obtenidos y habilitados (máximo 5) +
   winPoints +
   eliminationPoints +
   survivalPoints;
@@ -646,13 +666,60 @@ interface SpecialPointMovement {
   leaguePeriodId: string;
   playerKey: string;
   amount: number;
+  sourceDefinitionId?: string;
+  name: string;
+  description?: string;
   reason?: string;
   createdAt: string;
   status: SpecialPointMovementStatus;
 }
 ```
 
+El catálogo `LeagueAchievementDefinition` es independiente del catálogo rotativo. Una selección del
+catálogo copia `sourceDefinitionId`, nombre, descripción y puntos al movimiento; `Otro / Personalizado`
+permite crear el mismo snapshot sin definición de origen. Editar el catálogo nunca altera movimientos
+históricos.
+
 `specialLeaguePoints` se deriva sumando movimientos `active`. Una anulación cambia el movimiento a `void`, sin borrarlo. Estos puntos afectan exclusivamente el Leaderboard de liga, nunca el Standing individual de una fecha. Corregirlos tras un cierre requiere reapertura o acción administrativa explícita y activa `financialReviewRequired` si puede cambiar el histórico.
+
+### 9.4 Penalizaciones administrativas de fecha
+
+El catálogo global `TournamentPenaltyDefinition` contiene solo montos enteros negativos y es
+independiente de los logros rotativos y del catálogo de liga. Sus definiciones no ocupan uno de los
+cinco espacios rotativos. El chevron de cada jugador en Standing abre su desglose y permite aplicar
+una definición activa o anular un movimiento previo.
+
+```ts
+interface TournamentPenaltyDefinition {
+  id: string;
+  name: string;
+  description: string;
+  points: number; // entero < 0
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TournamentPenaltyMovement {
+  id: string;
+  tournamentId: string;
+  playerKey: string;
+  sourceDefinitionId?: string;
+  name: string;
+  description?: string;
+  amount: number; // entero < 0
+  createdAt: string;
+  status: 'active' | 'void';
+  voidedAt?: string;
+}
+```
+
+El movimiento guarda un snapshot independiente del catálogo. Solo los movimientos activos reducen
+`TournamentStandingEntry.totalPoints`; no cambian `achievementPoints`, `achievementCount`, victorias,
+eliminaciones ni resultados de mesa. La liga acumula ese Standing penalizado en su Leaderboard. Anular
+preserva el movimiento y revierte su efecto deportivo. Una revisión financiera solo se abre si cambia
+el crédito teórico de premios de fecha o mes que ya fueron consolidados; el crédito nunca se ajusta
+automáticamente. Un torneo `prizeMode = 'none'` no genera revisión financiera por esta operación.
 
 ---
 
@@ -691,10 +758,10 @@ Orden competitivo Alpha 0.1:
 5. resolución administrativa explícita cuando todos los criterios anteriores siguen empatados;
 6. orden alfabético y clave estable únicamente como fallback de visualización antes de resolver.
 
-La cantidad de logros se deriva de los hechos confirmados y del snapshot `AchievementConfig` del
-Tournament, sin persistir un contador duplicado. `achievementCount` cuenta exclusivamente los logros
-rotativos obtenidos y habilitados (`rotating1` a `rotating5`); no incluye victorias, eliminaciones ni
-supervivencia. Esos hechos continúan aportando puntos según `AchievementConfig`, mientras que las
+La cantidad de logros se deriva de los hechos confirmados y de los snapshots rotativos del Tournament,
+sin persistir un contador duplicado. `achievementCount` cuenta exclusivamente IDs obtenidos cuyos
+snapshots están habilitados y tienen `points > 0`; penalizaciones, valores cero, victorias, eliminaciones
+y supervivencia no cuentan. Esos hechos continúan aportando puntos según sus reglas, mientras que las
 victorias y eliminaciones mantienen sus propios criterios de desempate. `achievementPoints` continúa
 formando parte de los puntos totales, pero no se reutiliza como tercer criterio.
 
@@ -958,6 +1025,22 @@ La distribución del aporte por jugador ofrece controles numéricos y un desliza
 
 Los modales de recálculo de Standing/Leaderboard y revisión de créditos deben limitar su altura al viewport y permitir desplazamiento vertical para que todas las diferencias y acciones sean accesibles en tablet.
 
+### 15.1 Eliminación previa al comienzo competitivo
+
+Configuración del Tournament ofrece una **Zona de peligro** para eliminar una fecha o evento creado
+por error, con confirmación explícita y sin exigir escribir su nombre. Solo se permite en `setup`,
+con `currentRound = 0`, ninguna ronda generada y sin historial competitivo ni financiero asociado.
+Generar Ronda 1 ya constituye historial de emparejamientos, aunque no tenga mesas guardadas.
+Los movimientos financieros (incluso anulados), aportes consolidados, penalizaciones históricas,
+órdenes administrativos o un cierre previo bloquean la operación desde dominio, no solo desde UI.
+Una fecha asociada a una liga finalizada tampoco se elimina.
+
+Se elimina el Tournament con sus inscripciones/configuración y únicamente sus aportes proyectados.
+La asociación a la liga desaparece al quitar `Tournament.leaguePeriodId` junto al evento; no existe
+una lista duplicada de fechas dentro de LeaguePeriod. Los pozos proyectados se derivan nuevamente.
+Se conservan identidades globales, otras fechas, resultados, snapshots y todos los movimientos de
+crédito. No se agrega un estado ni un flujo de cancelación de eventos.
+
 ---
 
 ## 16. Edición manual de mesas
@@ -1092,9 +1175,7 @@ Google Sheets
 - table_id
 - participant_id
 - player_key
-- rotating_1
-- rotating_2
-- rotating_3
+- rotating_achievement_ids (lista/JSON de IDs del snapshot del Tournament)
 - won_table
 - eliminations
 - survived
@@ -1385,6 +1466,44 @@ Cuando exista duda:
 - Un Fantasma legado en un Tournament `swiss` se conserva para reconstruir rondas históricas, pero
   queda inactivo y no se autoriza para rondas futuras.
 
+### 26.13 Migración de catálogos de logros y penalizaciones
+
+- El schema local de Tournament sube a versión 10, el workspace a versión 7 y el ledger de liga a
+  versión 8. La instantánea transaccional conserva versión 1 porque encapsula esos serializers.
+- `rotating1` a `rotating5` se convierten idempotentemente a `rotatingAchievementIds`; se deduplican
+  IDs y se crea un snapshot dinámico por configuración histórica, incluyendo cuarto y quinto cuando
+  existían.
+- Los `achievementPoints` ya consolidados de Tournament finalizados no se recalculan durante la
+  migración. Futuras correcciones sí usan el snapshot migrado del evento.
+- El workspace incorpora dos catálogos separados: rotativos de mesa y logros/penalizaciones de liga.
+  Las definiciones reconstruidas desde historia usan IDs determinísticos para que reimportar un mismo
+  respaldo no cree duplicados semánticos.
+- `SpecialPointMovement` legacy recibe metadata de snapshot a partir de su motivo, sin modificar el
+  monto, estado ni relación con jugador/liga. `CreditMovement` permanece intacto.
+- Snapshots de Tournament 1–9, workspaces 1–6 y ledgers 1–7 continúan siendo legibles.
+
+### 26.14 Migración de penalizaciones administrativas de fecha
+
+- El schema local de Tournament sube a versión 11 y el workspace a versión 8. El ledger de liga
+  permanece en versión 8 y la instantánea transaccional permanece en versión 1.
+- Tournament anteriores reciben `penaltyMovements: []`; Workspace anteriores reciben
+  `tournamentPenaltyCatalog: []`. Los respaldos soportados previamente siguen siendo legibles.
+- Las definiciones eliminadas de un catálogo persistido, incluso vacío, no se reconstruyen desde
+  snapshots ni movimientos históricos al recuperar o importar datos. La reconstrucción determinística
+  solo se utiliza cuando el catálogo no existía en un schema anterior; un marcador transitorio permite
+  completar la reconstrucción de definiciones de liga después de cargar su ledger, sin persistir ese
+  marcador en el nuevo workspace.
+
+### 26.15 Encuadres manuales de fotos
+
+- Solo el schema del ledger de liga sube de 8 a 9; Tournament permanece en 11, Workspace en 8,
+  la instantánea transaccional en 1 y la base de imágenes IndexedDB en 1.
+- ChampionPhotoReference agrega `cardCrop` y `detailCrop` opcionales. Ledgers 1–8 siguen cargando.
+- Fotos antiguas sin encuadre usan cobertura centrada con zoom 1. Metadata de encuadre inválida
+  importada usa ese mismo fallback sin descartar la foto ni los datos deportivos.
+- No se modifica ni reexporta el blob original. El respaldo JSON incluye los encuadres y referencia,
+  pero, como antes, no incluye los archivos binarios almacenados en IndexedDB.
+
 ---
 
 ## 27. Hall of Fame
@@ -1429,9 +1548,19 @@ interface ChampionPhotoStorage {
 - Se aceptan JPEG, PNG y WebP de hasta 5 MB; existe vista previa antes de guardar.
 - Los blobs/base64 grandes no se guardan en `localStorage`.
 - La foto puede agregarse al cerrar la liga o después, reemplazarse y eliminarse.
+- `Ajustar foto` permite arrastrar con mouse o touch y ajustar zoom 1–4, con dos encuadres
+  independientes: tarjeta (3:4) y detalle (4:3). Los marcos mantienen esas proporciones en tablet y
+  desktop para que la vista previa coincida con la presentación final.
+- `ChampionPhotoReference.cardCrop/detailCrop?: ChampionPhotoCrop`, donde `{ x, y, zoom }` guarda
+  posiciones normalizadas 0–1 dentro del excedente de imagen y zoom relativo al mínimo que cubre
+  el marco. No se permiten áreas vacías visibles.
+- El editor usa React/CSS/Pointer Events, sin nuevas dependencias. Guardar encuadres modifica el
+  borrador; `Guardar registro` persiste. Cancelar cualquiera de esos pasos conserva el registro
+  anterior y su imagen original. Reabrir `Editar registro` permite reajustarlos sin escribir el blob.
 - `commanderName`, `deckName` y `deckUrl` son metadata opcional del registro; editarlos no cambia
   Leaderboard, Standing, resultados ni crédito.
 - Si no existen snapshots se muestra un estado vacío real, sin fixtures de producción.
+- Texto conmemorativo: “Aquí quedan inmortalizados los campeones que marcaron cada temporada.”
 
 ---
 
